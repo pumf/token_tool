@@ -741,15 +741,17 @@ struct MenuBarLabel: View {
     }
 
     private var qoderText: String {
-        guard let qoder = store.qoder, qoder.ok == true, let percent = qoder.remainingPercent, (qoder.total ?? 0) > 0 else {
+        guard let qoder = store.qoder, qoder.ok == true, let remaining = qoder.remaining, (qoder.total ?? 0) > 0 else {
             return "--"
         }
-        return Format.percent(percent)
+        return Format.credits(remaining)
     }
 
     private var workbuddyText: String {
-        guard let workbuddy = store.workbuddy, workbuddy.ok == true else { return "--" }
-        return Format.compact(workbuddy.remaining)
+        guard let workbuddy = store.workbuddy, workbuddy.ok == true, let remaining = workbuddy.remaining else {
+            return "--"
+        }
+        return Format.credits(remaining)
     }
 
     private var codexText: String {
@@ -760,7 +762,7 @@ struct MenuBarLabel: View {
     private var tooltip: String {
         var parts: [String] = []
         if let qoder = store.qoder, qoder.ok == true {
-            parts.append("Qoder \(Format.percent(qoder.remainingPercent))（剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total))）")
+            parts.append("Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits")
         } else {
             parts.append("Qoder 不可用")
         }
@@ -865,7 +867,7 @@ struct MenuContent: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Text("已用 \(Format.percent(qoder.usedPercent))")
+                    Text("已用 \(Format.credits(qoder.used)) Credits")
                     Spacer()
                     if let expires = qoder.planExpiresAt, expires != "N/A", !expires.isEmpty {
                         Text("到期 \(expires)")
@@ -898,7 +900,7 @@ struct MenuContent: View {
                     tint: Theme.workbuddy
                 )
                 HStack(spacing: 8) {
-                    Text("已用 \(Format.percent(workbuddy.usedPercent))")
+                    Text("已用 \(Format.credits(workbuddy.used)) Credits")
                     Spacer()
                     Text("\(workbuddy.packages ?? 0) 个资源包")
                 }
