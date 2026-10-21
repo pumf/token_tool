@@ -14,7 +14,8 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
 - **本地缓存**：启动时先展示上次数据，再异步更新。
 - **开机启动**：面板一键开关，通过 LaunchAgent 实现，不产生 Dock 图标。
-- **通用二进制**：同时支持 Apple Silicon 与 Intel Mac，最低 macOS 13。
+- **原生安装包**：分别提供 Apple Silicon（arm64）与 Intel（x86_64）安装包，另附通用二进制，最低 macOS 13。
+- **应用图标**：三色环形仪表盘图标，安装后可在访达、启动台与 DMG 中识别。
 
 ## 界面说明
 
@@ -52,7 +53,7 @@ Q 1,770   W 12,480   C 8.5%
 | 项目 | 要求 |
 | --- | --- |
 | 系统 | macOS 13 Ventura 及以上 |
-| 架构 | Apple Silicon / Intel（Universal Binary） |
+| 架构 | Apple Silicon（arm64）或 Intel（x86_64），提供独立安装包与通用版本 |
 | Python | Python 3（系统 Command Line Tools 自带即可） |
 | Qoder | 已安装官方 CLI `qoderclicn` 并完成登录 |
 | WorkBuddy | 客户端已安装、已登录并保持运行 |
@@ -62,7 +63,17 @@ Q 1,770   W 12,480   C 8.5%
 
 ### 从 Release 安装（推荐）
 
-1. 前往 [Releases](https://github.com/pumf/token_tool/releases) 下载最新的 `TokenTool-<版本>.dmg` 或 `.zip`。
+按 Mac 芯片选择对应安装包（DMG 与 ZIP 内容相同，任选其一）：
+
+| Mac 类型 | 安装包 |
+| --- | --- |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.2.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.2.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.2.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1.zip) |
+
+不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
+
+1. 下载与芯片匹配的 DMG 或 ZIP。
 2. 打开 DMG，将 **TokenTool** 拖入「应用程序」；ZIP 则解压后拖入。
 3. 首次启动若被 macOS 拦截（应用为本地构建，未使用 Developer ID 签名与公证），请：
    - 在「应用程序」中右键 TokenTool →「打开」→ 再次确认「打开」；或
@@ -85,7 +96,13 @@ cd token_tool
 open build/TokenTool.app
 ```
 
-`build.sh` 会分别编译 `arm64` 与 `x86_64`，用 `lipo` 合并为通用二进制，并进行 ad-hoc 签名。
+`build.sh` 会分别编译 `arm64` 与 `x86_64`，产出：
+
+- `build/TokenTool-arm64.app`：Apple Silicon 原生版本
+- `build/TokenTool-x86_64.app`：Intel 原生版本
+- `build/TokenTool.app`：用 `lipo` 合并的通用版本
+
+三个应用包均包含图标与采集器，并完成 ad-hoc 签名。
 
 安装到「应用程序」：
 
@@ -147,8 +164,9 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── TokenToolApp.swift   # MenuBarExtra 入口，无 Dock 图标
 ├── Views.swift          # 菜单栏标签、详情面板、数据状态与刷新调度
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
-├── Info.plist           # 应用元数据（LSUIElement / 版本号）
-├── build.sh             # 通用二进制构建与 ad-hoc 签名
+├── AppIcon.icns         # 应用图标
+├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
+├── build.sh             # arm64 / x86_64 / 通用版本构建与 ad-hoc 签名
 └── README.md
 ```
 
@@ -158,6 +176,8 @@ defaults delete com.local.tokentool 2>/dev/null
 
 - Qoder 与 WorkBuddy 的菜单栏和详情改为显示积分数值，不再显示百分比。
 - WorkBuddy 菜单栏积分改为完整数值（如 `3,523`），不再使用 `3.5k` 缩写。
+- 新增应用图标：深色圆角底、三色环形仪表盘与白色指针。
+- 新增 Apple Silicon（arm64）与 Intel（x86_64）独立安装包，同时保留通用版本。
 
 ### 1.2.0
 
