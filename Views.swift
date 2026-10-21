@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import Darwin
+@preconcurrency import UserNotifications
 
 struct CodexWindow: Codable, Sendable, Identifiable {
     let id: String
@@ -187,6 +188,33 @@ final class UsageStore: ObservableObject {
     @Published var showCodexInMenuBar: Bool {
         didSet { UserDefaults.standard.set(showCodexInMenuBar, forKey: "menuBar.codex") }
     }
+    @Published var remindQoderClaim: Bool {
+        didSet {
+            UserDefaults.standard.set(remindQoderClaim, forKey: "reminder.qoder.claim")
+            reminderSettingChanged()
+        }
+    }
+    @Published var remindWorkBuddyClaim: Bool {
+        didSet {
+            UserDefaults.standard.set(remindWorkBuddyClaim, forKey: "reminder.workbuddy.claim")
+            reminderSettingChanged()
+        }
+    }
+    @Published var remindCodexReset: Bool {
+        didSet {
+            UserDefaults.standard.set(remindCodexReset, forKey: "reminder.codex.reset")
+            reminderSettingChanged()
+        }
+    }
+    @Published private(set) var notificationsDenied = false
+
+    private enum ReminderID {
+        static let qoder = "reminder.qoder.claim"
+        static let workbuddy = "reminder.workbuddy.claim"
+        static let codex = "reminder.codex.reset"
+    }
+
+    private let notificationCenter = UNUserNotificationCenter.current()
 
     private struct CacheFile: Codable {
         var codex: ProviderResult?
@@ -205,16 +233,23 @@ final class UsageStore: ObservableObject {
     private var fastTimer: Timer?
     private var qoderTimer: Timer?
 
-    private static func menuBarVisible(_ key: String) -> Bool {
+    private static func storedFlag(_ key: String) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? true
     }
 
     init(refreshOnStart: Bool = true) {
-        showQoderInMenuBar = Self.menuBarVisible("menuBar.qoder")
-        showWorkBuddyInMenuBar = Self.menuBarVisible("menuBar.workbuddy")
-        showCodexInMenuBar = Self.menuBarVisible("menuBar.codex")
+        showQoderInMenuBar = Self.storedFlag("menuBar.qoder")
+        showWorkBuddyInMenuBar = Self.storedFlag("menuBar.workbuddy")
+        showCodexInMenuBar = Self.storedFlag("menuBar.codex")
+        remindQoderClaim = Self.storedFlag("reminder.qoder.claim")
+        remindWorkBuddyClaim = Self.storedFlag("reminder.workbuddy.claim")
+        remindCodexReset = Self.storedFlag("reminder.codex.reset")
         loadCache()
         guard refreshOnStart else { return }
+        refreshReminders()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.prepareNotificationAuthorization()
+        }
         refreshFast()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             self?.refreshQoder()
@@ -290,6 +325,114 @@ final class UsageStore: ObservableObject {
         launchAtLogin = LaunchAtLogin.isEnabled
     }
 
+    func refreshNotificationStatus() {
+        let center = notificationCenter
+        center.getNotificationSettings { [weak self] settings in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let denied = settings.authorizationStatus == .denied
+                let recovered = self.notificationsDenied && !denied
+                self.notificationsDenied = denied
+                if recovered {
+                    self.refreshReminders()
+                }
+            }
+        }
+    }
+
+    private func reminderSettingChanged() {
+        refreshReminders()
+        prepareNotificationAuthorization()
+    }
+
+    private func prepareNotificationAuthorization() {
+        guard remindQoderClaim || remindWorkBuddyClaim || remindCodexReset else { return }
+        let center = notificationCenter
+        center.getNotificationSettings { [weak self] settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.notificationsDenied = !granted
+                        if granted {
+                            self.refreshReminders()
+                        }
+                    }
+                }
+            case .denied:
+                Task { @MainActor [weak self] in
+                    self?.notificationsDenied = true
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func refreshReminders() {
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: [
+            ReminderID.qoder, ReminderID.workbuddy, ReminderID.codex,
+        ])
+        if remindQoderClaim {
+            addDailyReminder(
+                id: ReminderID.qoder,
+                title: "Qoder 今日 100 Credits 可领取",
+                body: "打开 Qoder 领取今日额度。",
+                hour: 10,
+                minute: 0
+            )
+        }
+        if remindWorkBuddyClaim {
+            addDailyReminder(
+                id: ReminderID.workbuddy,
+                title: "WorkBuddy 今日 100 积分可领取",
+                body: "打开 WorkBuddy 领取今日积分。",
+                hour: 0,
+                minute: 0
+            )
+        }
+        scheduleCodexReminder()
+    }
+
+    private func addDailyReminder(id: String, title: String, body: String, hour: Int, minute: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        var components = DateComponents()
+        components.hour = hour
+        components.minute = minute
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+        notificationCenter.add(
+            UNNotificationRequest(identifier: id, content: content, trigger: trigger),
+            withCompletionHandler: nil
+        )
+    }
+
+    private func scheduleCodexReminder() {
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: [ReminderID.codex])
+        guard remindCodexReset,
+              let windows = codex?.windows,
+              !windows.isEmpty,
+              let window = windows.max(by: { $0.windowMinutes < $1.windowMinutes }),
+              let reset = window.resetsAt else { return }
+        let now = Int(Date().timeIntervalSince1970)
+        guard reset > now else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Codex \(Format.window(window.windowMinutes))额度已重置"
+        content.body = "额度窗口已刷新，可以继续使用。"
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: TimeInterval(reset - now) + 30,
+            repeats: false
+        )
+        notificationCenter.add(
+            UNNotificationRequest(identifier: ReminderID.codex, content: content, trigger: trigger),
+            withCompletionHandler: nil
+        )
+    }
+
     private func apply(_ result: ProviderResult, to provider: Provider) {
         guard result.ok == true else {
             let message = result.error ?? "未知错误"
@@ -304,6 +447,7 @@ final class UsageStore: ObservableObject {
         case .codex:
             codex = result
             codexError = nil
+            scheduleCodexReminder()
         case .workbuddy:
             workbuddy = result
             workbuddyError = nil
@@ -644,12 +788,14 @@ struct MenuContent: View {
             workbuddyCard
             codexCard
             menuBarSettings
+            reminderSettings
             Divider()
             footer
         }
         .padding(14)
         .frame(width: 382)
         .background(.regularMaterial)
+        .onAppear { store.refreshNotificationStatus() }
     }
 
     private var header: some View {
@@ -926,22 +1072,97 @@ struct MenuContent: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
-            visibilityChip("Qoder", color: Theme.qoder, isOn: $store.showQoderInMenuBar)
-            visibilityChip("WorkBuddy", color: Theme.workbuddy, isOn: $store.showWorkBuddyInMenuBar)
-            visibilityChip("Codex", color: Theme.codex, isOn: $store.showCodexInMenuBar)
+            settingChip(
+                "Qoder",
+                color: Theme.qoder,
+                isOn: $store.showQoderInMenuBar,
+                iconOn: "eye.fill",
+                iconOff: "eye.slash",
+                help: "在菜单栏显示 Qoder"
+            )
+            settingChip(
+                "WorkBuddy",
+                color: Theme.workbuddy,
+                isOn: $store.showWorkBuddyInMenuBar,
+                iconOn: "eye.fill",
+                iconOff: "eye.slash",
+                help: "在菜单栏显示 WorkBuddy"
+            )
+            settingChip(
+                "Codex",
+                color: Theme.codex,
+                isOn: $store.showCodexInMenuBar,
+                iconOn: "eye.fill",
+                iconOff: "eye.slash",
+                help: "在菜单栏显示 Codex"
+            )
         }
     }
 
-    private func visibilityChip(
+    private var reminderSettings: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("提醒")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                settingChip(
+                    "Qoder 10:00",
+                    color: Theme.qoder,
+                    isOn: $store.remindQoderClaim,
+                    iconOn: "bell.fill",
+                    iconOff: "bell.slash",
+                    help: "每天 10:00 提醒领取 Qoder 100 Credits"
+                )
+                settingChip(
+                    "WorkBuddy 00:00",
+                    color: Theme.workbuddy,
+                    isOn: $store.remindWorkBuddyClaim,
+                    iconOn: "bell.fill",
+                    iconOff: "bell.slash",
+                    help: "每天 00:00 提醒领取 WorkBuddy 100 积分"
+                )
+                settingChip(
+                    "Codex 重置",
+                    color: Theme.codex,
+                    isOn: $store.remindCodexReset,
+                    iconOn: "bell.fill",
+                    iconOff: "bell.slash",
+                    help: "Codex 额度重置时提醒"
+                )
+            }
+            if store.notificationsDenied {
+                HStack(spacing: 4) {
+                    Image(systemName: "bell.slash.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text("系统通知未授权，提醒不会弹出")
+                    Spacer(minLength: 4)
+                    Button("去开启") {
+                        Apps.openURL("x-apple.systempreferences:com.apple.preference.notifications")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Theme.warning)
+                }
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func settingChip(
         _ title: String,
         color: Color,
-        isOn: Binding<Bool>
+        isOn: Binding<Bool>,
+        iconOn: String,
+        iconOff: String,
+        help: String
     ) -> some View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
             HStack(spacing: 3) {
-                Image(systemName: isOn.wrappedValue ? "eye.fill" : "eye.slash")
+                Image(systemName: isOn.wrappedValue ? iconOn : iconOff)
                     .font(.system(size: 8, weight: .semibold))
                 Text(title)
                     .font(.system(size: 9, weight: .medium))
@@ -960,7 +1181,7 @@ struct MenuContent: View {
             )
         }
         .buttonStyle(.plain)
-        .help(isOn.wrappedValue ? "在菜单栏显示 \(title)" : "在菜单栏隐藏 \(title)")
+        .help("\(help)（\(isOn.wrappedValue ? "已开启" : "已关闭")）")
     }
 
     private var footer: some View {
