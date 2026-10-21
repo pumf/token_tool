@@ -178,6 +178,15 @@ final class UsageStore: ObservableObject {
     @Published private(set) var lastFastAt: Date?
     @Published private(set) var lastQoderAt: Date?
     @Published private(set) var launchAtLogin = LaunchAtLogin.isEnabled
+    @Published var showQoderInMenuBar: Bool {
+        didSet { UserDefaults.standard.set(showQoderInMenuBar, forKey: "menuBar.qoder") }
+    }
+    @Published var showWorkBuddyInMenuBar: Bool {
+        didSet { UserDefaults.standard.set(showWorkBuddyInMenuBar, forKey: "menuBar.workbuddy") }
+    }
+    @Published var showCodexInMenuBar: Bool {
+        didSet { UserDefaults.standard.set(showCodexInMenuBar, forKey: "menuBar.codex") }
+    }
 
     private struct CacheFile: Codable {
         var codex: ProviderResult?
@@ -196,7 +205,14 @@ final class UsageStore: ObservableObject {
     private var fastTimer: Timer?
     private var qoderTimer: Timer?
 
+    private static func menuBarVisible(_ key: String) -> Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+    }
+
     init(refreshOnStart: Bool = true) {
+        showQoderInMenuBar = Self.menuBarVisible("menuBar.qoder")
+        showWorkBuddyInMenuBar = Self.menuBarVisible("menuBar.workbuddy")
+        showCodexInMenuBar = Self.menuBarVisible("menuBar.codex")
         loadCache()
         guard refreshOnStart else { return }
         refreshFast()
@@ -444,6 +460,13 @@ struct UsageBar: View {
     }
 }
 
+struct ProviderLink {
+    let title: String
+    let icon: String
+    let help: String
+    let action: () -> Void
+}
+
 struct ProviderCard<Content: View>: View {
     let title: String
     let subtitle: String
@@ -452,8 +475,7 @@ struct ProviderCard<Content: View>: View {
     let plan: String?
     let error: String?
     let footer: String
-    let actionTitle: String?
-    let action: (() -> Void)?
+    let links: [ProviderLink]
     let content: Content
 
     init(
@@ -464,8 +486,7 @@ struct ProviderCard<Content: View>: View {
         plan: String? = nil,
         error: String? = nil,
         footer: String,
-        actionTitle: String? = nil,
-        action: (() -> Void)? = nil,
+        links: [ProviderLink] = [],
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
@@ -475,8 +496,7 @@ struct ProviderCard<Content: View>: View {
         self.plan = plan
         self.error = error
         self.footer = footer
-        self.actionTitle = actionTitle
-        self.action = action
+        self.links = links
         self.content = content()
     }
 
@@ -522,16 +542,27 @@ struct ProviderCard<Content: View>: View {
                 .foregroundStyle(Theme.warning)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 Text(footer)
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
                 Spacer(minLength: 4)
-                if let actionTitle, let action {
-                    Button(actionTitle, action: action)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .medium))
+                ForEach(Array(links.enumerated()), id: \.offset) { _, link in
+                    Button {
+                        link.action()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: link.icon)
+                                .font(.system(size: 8, weight: .semibold))
+                            Text(link.title)
+                                .font(.system(size: 9, weight: .medium))
+                        }
                         .foregroundStyle(color)
+                        .padding(.vertical, 2)
+                    }
+                    .buttonStyle(.plain)
+                    .help(link.help)
                 }
             }
         }
@@ -551,10 +582,18 @@ struct MenuBarLabel: View {
     @ObservedObject var store: UsageStore
 
     var body: some View {
-        Text("Q \(qoderText)   W \(workbuddyText)   C \(codexText)")
+        Text(labelText)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .monospacedDigit()
             .help(tooltip)
+    }
+
+    private var labelText: String {
+        var parts: [String] = []
+        if store.showQoderInMenuBar { parts.append("Q \(qoderText)") }
+        if store.showWorkBuddyInMenuBar { parts.append("W \(workbuddyText)") }
+        if store.showCodexInMenuBar { parts.append("C \(codexText)") }
+        return parts.isEmpty ? "AI" : parts.joined(separator: "   ")
     }
 
     private var qoderText: String {
@@ -604,6 +643,7 @@ struct MenuContent: View {
             qoderCard
             workbuddyCard
             codexCard
+            menuBarSettings
             Divider()
             footer
         }
@@ -650,8 +690,7 @@ struct MenuContent: View {
             plan: Format.plan(store.qoder?.plan),
             error: store.qoderError,
             footer: qoderFooter,
-            actionTitle: qoderActionTitle,
-            action: qoderAction
+            links: qoderLinks
         ) {
             if let qoder = store.qoder {
                 let addonTotal = qoder.addonTotal ?? 0
@@ -703,10 +742,7 @@ struct MenuContent: View {
             plan: Format.plan(store.workbuddy?.plan),
             error: store.workbuddyError,
             footer: workbuddyFooter,
-            actionTitle: store.workbuddyError == nil ? nil : "打开 WorkBuddy",
-            action: store.workbuddyError == nil ? nil : {
-                Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
-            }
+            links: workbuddyLinks
         ) {
             if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
                 UsageBar(
@@ -741,10 +777,7 @@ struct MenuContent: View {
             plan: Format.plan(store.codex?.plan),
             error: store.codexError,
             footer: codexFooter,
-            actionTitle: store.codexError == nil ? nil : "打开 ChatGPT",
-            action: store.codexError == nil ? nil : {
-                Apps.open(bundleID: "com.openai.chat", fallback: "/Applications/ChatGPT.app")
-            }
+            links: codexLinks
         ) {
             if let codex = store.codex {
                 if let windows = codex.windows, !windows.isEmpty {
@@ -810,22 +843,124 @@ struct MenuContent: View {
         return "更新于 \(Format.time(store.codex?.updatedDate ?? store.lastFastAt))"
     }
 
-    private var qoderActionTitle: String? {
-        guard let error = store.qoderError else { return nil }
-        if error.contains("未登录") { return "打开终端登录" }
-        if error.contains("未安装") { return "安装说明" }
-        return nil
+    private var qoderLinks: [ProviderLink] {
+        var links = [
+            ProviderLink(
+                title: "打开",
+                icon: "arrow.up.forward.app",
+                help: "打开 Qoder CN"
+            ) {
+                Apps.open(bundleID: "com.qodercn.app", fallback: "/Applications/Qoder CN.app")
+            },
+            ProviderLink(
+                title: "官网",
+                icon: "globe",
+                help: "打开 Qoder 官网"
+            ) {
+                Apps.openURL("https://qoder.com.cn")
+            },
+        ]
+        if let error = store.qoderError {
+            if error.contains("未登录") {
+                links.append(ProviderLink(
+                    title: "终端登录",
+                    icon: "terminal",
+                    help: "在终端登录 Qoder CLI"
+                ) {
+                    Apps.openTerminal("~/.local/bin/qoderclicn login")
+                })
+            } else if error.contains("未安装") {
+                links.append(ProviderLink(
+                    title: "安装 CLI",
+                    icon: "arrow.down.circle",
+                    help: "查看 Qoder CLI 安装说明"
+                ) {
+                    Apps.openURL("https://docs.qoder.cn/cli/installation")
+                })
+            }
+        }
+        return links
     }
 
-    private var qoderAction: (() -> Void)? {
-        guard let error = store.qoderError else { return nil }
-        if error.contains("未登录") {
-            return { Apps.openTerminal("~/.local/bin/qoderclicn login") }
+    private var workbuddyLinks: [ProviderLink] {
+        [
+            ProviderLink(
+                title: "打开",
+                icon: "arrow.up.forward.app",
+                help: "打开 WorkBuddy"
+            ) {
+                Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
+            },
+            ProviderLink(
+                title: "官网",
+                icon: "globe",
+                help: "打开 WorkBuddy 官网"
+            ) {
+                Apps.openURL("https://www.workbuddy.cn")
+            },
+        ]
+    }
+
+    private var codexLinks: [ProviderLink] {
+        [
+            ProviderLink(
+                title: "打开",
+                icon: "arrow.up.forward.app",
+                help: "打开 ChatGPT"
+            ) {
+                Apps.open(bundleID: "com.openai.codex", fallback: "/Applications/ChatGPT.app")
+            },
+            ProviderLink(
+                title: "官网",
+                icon: "globe",
+                help: "打开 Codex 官网"
+            ) {
+                Apps.openURL("https://openai.com/codex/")
+            },
+        ]
+    }
+
+    private var menuBarSettings: some View {
+        HStack(spacing: 6) {
+            Text("菜单栏显示")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            visibilityChip("Qoder", color: Theme.qoder, isOn: $store.showQoderInMenuBar)
+            visibilityChip("WorkBuddy", color: Theme.workbuddy, isOn: $store.showWorkBuddyInMenuBar)
+            visibilityChip("Codex", color: Theme.codex, isOn: $store.showCodexInMenuBar)
         }
-        if error.contains("未安装") {
-            return { Apps.openURL("https://docs.qoder.cn/cli/installation") }
+    }
+
+    private func visibilityChip(
+        _ title: String,
+        color: Color,
+        isOn: Binding<Bool>
+    ) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: isOn.wrappedValue ? "eye.fill" : "eye.slash")
+                    .font(.system(size: 8, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundStyle(isOn.wrappedValue ? color : Color.secondary)
+            .background(
+                Capsule().fill(isOn.wrappedValue ? color.opacity(0.13) : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                Capsule().stroke(
+                    isOn.wrappedValue ? color.opacity(0.25) : Color.primary.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
         }
-        return nil
+        .buttonStyle(.plain)
+        .help(isOn.wrappedValue ? "在菜单栏显示 \(title)" : "在菜单栏隐藏 \(title)")
     }
 
     private var footer: some View {
