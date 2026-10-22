@@ -69,6 +69,7 @@ struct UsageForecast: Sendable {
 struct UsageInsight: Sendable {
     let todayConsumed: Double?
     let dailyAverage: Double?
+    let netDailyAverage: Double?
     let observedDays: Int
     let isPercent: Bool
 }
@@ -78,8 +79,8 @@ enum UsageAnalytics {
     static let chartDays = 7
     static let sampleInterval: TimeInterval = 300
     static let maxSamplesPerProvider = 4500
-    static let lowThreshold = 20.0
-    static let lowRecovery = 25.0
+    static let defaultLowThreshold = 20.0
+    static let lowRecoveryGap = 5.0
     static let lowCooldown: TimeInterval = 12 * 3600
     static let rampCooldown: TimeInterval = 6 * 3600
     static let rateWindow: TimeInterval = 3600
@@ -157,13 +158,25 @@ enum UsageAnalytics {
         provider: UsageProvider,
         input: UsageInput,
         samples: [UsageSample],
-        now: Date = Date()
+        now: Date = Date(),
+        lowThreshold: Double = defaultLowThreshold
     ) -> UsageForecast? {
         switch provider {
         case .qoder, .workbuddy:
-            return creditForecast(provider: provider, input: input, samples: samples, now: now)
+            return creditForecast(
+                provider: provider,
+                input: input,
+                samples: samples,
+                now: now,
+                lowThreshold: lowThreshold
+            )
         case .codex:
-            return codexForecast(input: input, samples: samples, now: now)
+            return codexForecast(
+                input: input,
+                samples: samples,
+                now: now,
+                lowThreshold: lowThreshold
+            )
         }
     }
 
@@ -202,6 +215,7 @@ enum UsageAnalytics {
         guard points.count >= 2, let first = points.first, let last = points.last else { return nil }
 
         var totalConsumed: Double = 0
+        var totalReclaimed: Double = 0
         var todayConsumed: Double = 0
         var hasTodayPair = false
         for index in 1..<points.count {
@@ -223,27 +237,30 @@ enum UsageAnalytics {
             let consumed = previous.value - current.value
             let endsToday = current.at >= todayStart
             if endsToday { hasTodayPair = true }
-            guard consumed > 0 else { continue }
-            totalConsumed += consumed
-            guard endsToday else { continue }
-            if previous.at < todayStart {
-                todayConsumed += consumed * min(1, (current.at - todayStart) / span)
-            } else {
-                todayConsumed += consumed
+            if consumed > 0 {
+                totalConsumed += consumed
+                guard endsToday else { continue }
+                if previous.at < todayStart {
+                    todayConsumed += consumed * min(1, (current.at - todayStart) / span)
+                } else {
+                    todayConsumed += consumed
+                }
+            } else if consumed < 0, provider != .codex {
+                totalReclaimed -= consumed
             }
         }
 
-        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: first.at))
-        let todayDay = calendar.startOfDay(for: now)
-        let dayDiff = calendar.dateComponents([.day], from: firstDay, to: todayDay).day ?? 0
-        let observedDays = min(chartDays, max(1, dayDiff + 1))
-        let dailyAverage = last.at - first.at >= minimumInsightSpan
-            ? totalConsumed / Double(observedDays)
+        let observedDays = min(chartDays, max(1, Int(ceil((last.at - first.at) / day))))
+        let hasSpan = last.at - first.at >= minimumInsightSpan
+        let dailyAverage = hasSpan ? totalConsumed / Double(observedDays) : nil
+        let netDailyAverage = hasSpan
+            ? (totalConsumed - totalReclaimed) / Double(observedDays)
             : nil
 
         return UsageInsight(
             todayConsumed: hasTodayPair ? todayConsumed : nil,
             dailyAverage: dailyAverage,
+            netDailyAverage: netDailyAverage,
             observedDays: observedDays,
             isPercent: provider == .codex
         )
@@ -299,26 +316,40 @@ enum UsageAnalytics {
         provider: UsageProvider,
         input: UsageInput,
         samples: [UsageSample],
-        now: Date
+        now: Date,
+        lowThreshold: Double
     ) -> UsageForecast? {
         let nowTs = now.timeIntervalSince1970
         let chartStart = nowTs - TimeInterval(chartDays) * day
-        let points = samples.compactMap { sample -> (at: Double, value: Double)? in
-            guard Double(sample.at) >= chartStart, let percent = sample.remainingPercent else { return nil }
-            return (Double(sample.at), percent)
+        let chartPoints = samples.compactMap { sample -> (at: Double, value: Double)? in
+            guard Double(sample.at) >= chartStart,
+                  let remaining = sample.remaining,
+                  remaining.isFinite else { return nil }
+            return (Double(sample.at), remaining)
         }
-        guard !points.isEmpty,
-              let current = currentPercent(provider: provider, input: input) else { return nil }
+        guard !chartPoints.isEmpty,
+              let current = currentPercent(provider: provider, input: input),
+              let currentCredits = currentCredits(input: input),
+              let insight = insight(provider: provider, input: input, samples: samples, now: now) else { return nil }
 
-        let recent = points.filter { $0.at >= nowTs - rateWindow }
-        guard let rate = rate(recent) else { return nil }
+        let values = downsample(chartPoints.sorted { $0.at < $1.at }.map(\.value))
+        guard let dailyAverage = insight.dailyAverage else {
+            return UsageForecast(
+                values: values,
+                text: "样本积累中",
+                help: "信用额预测需要至少 6 小时历史样本；当前可参考今日消耗。",
+                warning: false,
+                remainingPercent: current,
+                ratePerHour: nil,
+                windows: []
+            )
+        }
 
-        let values = downsample(points.map(\.value))
-        if rate <= 0.05 {
+        if dailyAverage <= 0.5 {
             return UsageForecast(
                 values: values,
                 text: "近期无明显消耗",
-                help: "近 7 天剩余比例趋势；当前消耗速度接近 0，暂无耗尽估算。",
+                help: "按已观察 \(insight.observedDays) 天的日均消耗估算；当前消耗速度接近 0，暂无耗尽估算。",
                 warning: false,
                 remainingPercent: current,
                 ratePerHour: 0,
@@ -326,29 +357,61 @@ enum UsageAnalytics {
             )
         }
 
-        let hours = current / rate
+        let netDaily = insight.netDailyAverage ?? dailyAverage
+        let reclaimed = max(0, (dailyAverage - netDaily) * Double(insight.observedDays))
+        let sampleNote = insight.observedDays < 3 ? "样本较少，建议多观察几天。" : ""
+        if netDaily <= 0.5 {
+            var help = "按已观察 \(insight.observedDays) 天统计：日均消耗约 \(creditText(dailyAverage)) Credits，领取/重置增加约 \(creditText(reclaimed)) Credits，净消耗已不大于 0，暂无耗尽估算。"
+            help += sampleNote
+            return UsageForecast(
+                values: values,
+                text: "按当前节奏不会耗尽",
+                help: help,
+                warning: current <= lowThreshold,
+                remainingPercent: current,
+                ratePerHour: 0,
+                windows: []
+            )
+        }
+
+        let hours = currentCredits / netDaily * 24
         let exhaustAt = now.addingTimeInterval(hours * 3600)
         let warning = current <= lowThreshold || hours <= 2
-        var help = "按近期速度估算，每小时约消耗 \(percentText(rate))"
-        if let total = input.total, total > 0 {
-            help += "（约 \(creditText(total * rate / 100)) Credits）"
+        var help = "按已观察 \(insight.observedDays) 天的净消耗约 \(creditText(netDaily)) Credits/天 估算"
+        if reclaimed > 0.5 {
+            help += "（已扣除领取/重置增加约 \(creditText(reclaimed)) Credits）"
+        } else {
+            help += "（未记录到领取/重置增加）"
         }
         help += "，预计 \(timeText(exhaustAt)) 降至 0，仅供参考。"
+        help += sampleNote
         return UsageForecast(
             values: values,
             text: "预计 \(durationText(hours))后耗尽",
             help: help,
             warning: warning,
             remainingPercent: current,
-            ratePerHour: rate,
+            ratePerHour: netDaily / 24,
             windows: []
         )
+    }
+
+    private static func currentCredits(input: UsageInput) -> Double? {
+        if let remaining = input.remaining, remaining.isFinite {
+            return max(0, remaining)
+        }
+        guard let total = input.total,
+              total > 0,
+              let percent = input.remainingPercent,
+              percent.isFinite else { return nil }
+        return max(0, total * percent / 100)
     }
 
     private static func codexForecast(
         input: UsageInput,
         samples: [UsageSample],
-        now: Date
+        now: Date,
+        lowThreshold: Double
     ) -> UsageForecast? {
         guard let primary = input.windows.first else { return nil }
         let nowTs = now.timeIntervalSince1970

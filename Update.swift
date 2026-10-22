@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 
 struct UpdateRelease: Equatable {
@@ -66,6 +67,15 @@ struct UpdateRelease: Equatable {
         }
         return universal?.url
     }
+
+    func checksum(for assetName: String) -> String? {
+        for line in notes.components(separatedBy: .newlines) where line.contains(assetName) {
+            if let range = line.range(of: #"[0-9a-fA-F]{64}"#, options: .regularExpression) {
+                return String(line[range]).lowercased()
+            }
+        }
+        return nil
+    }
 }
 
 enum UpdateVersion {
@@ -95,6 +105,7 @@ private enum UpdateError: Error {
     case badResponse
     case http(Int)
     case invalidDownload
+    case checksumMismatch
 
     var message: String {
         switch self {
@@ -104,6 +115,8 @@ private enum UpdateError: Error {
             return code == 403 ? "GitHub 访问受限，请稍后重试" : "GitHub 返回 HTTP \(code)"
         case .invalidDownload:
             return "下载的安装包无效"
+        case .checksumMismatch:
+            return "安装包 SHA-256 校验失败，请重试或从 Release 页面手动下载"
         }
     }
 }
@@ -233,6 +246,13 @@ final class UpdateChecker: ObservableObject {
                 try FileManager.default.moveItem(at: temporaryURL, to: destination)
                 let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 guard size > 100_000 else { throw UpdateError.invalidDownload }
+                if let expected = release.checksum(for: url.lastPathComponent) {
+                    let actual = try UpdateVerification.sha256Hex(of: destination)
+                    guard actual == expected else {
+                        try? FileManager.default.removeItem(at: destination)
+                        throw UpdateError.checksumMismatch
+                    }
+                }
                 self.state = .ready(release, destination)
                 NSWorkspace.shared.open(destination)
             } catch {
@@ -362,5 +382,14 @@ final class UpdateChecker: ObservableObject {
             case name
             case browserDownloadURL = "browser_download_url"
         }
+    }
+}
+
+enum UpdateVerification {
+    static func sha256Hex(of url: URL) throws -> String {
+        let data = try Data(contentsOf: url)
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

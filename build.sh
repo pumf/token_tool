@@ -15,7 +15,7 @@ for arch in arm64 x86_64; do
     swiftc -O -parse-as-library \
         -target "${arch}-apple-macos12.0" \
         -framework SwiftUI -framework AppKit -framework Combine -framework UserNotifications \
-        Analytics.swift Views.swift Update.swift TokenToolApp.swift \
+        Analytics.swift Views.swift Export.swift Update.swift TokenToolApp.swift \
         -o "$BUILD/TokenTool-${arch}"
 done
 

@@ -238,6 +238,12 @@ final class UsageStore: ObservableObject {
             prepareNotificationAuthorization()
         }
     }
+    @Published var lowBalanceThreshold: Int {
+        didSet {
+            UserDefaults.standard.set(lowBalanceThreshold, forKey: "alert.low.threshold")
+            resetLowAlertState()
+        }
+    }
     @Published private(set) var notificationsDenied = false
     @Published private var qoderHistory: [UsageSample] = []
     @Published private var workbuddyHistory: [UsageSample] = []
@@ -283,6 +289,11 @@ final class UsageStore: ObservableObject {
         UserDefaults.standard.object(forKey: key) as? Bool ?? true
     }
 
+    private static func storedLowThreshold() -> Int {
+        let value = UserDefaults.standard.integer(forKey: "alert.low.threshold")
+        return [10, 20, 30].contains(value) ? value : 20
+    }
+
     init(refreshOnStart: Bool = true) {
         showQoderInMenuBar = Self.storedFlag("menuBar.qoder")
         showWorkBuddyInMenuBar = Self.storedFlag("menuBar.workbuddy")
@@ -293,6 +304,7 @@ final class UsageStore: ObservableObject {
         alertLowBalance = Self.storedFlag("alert.low")
         alertExhaustion = Self.storedFlag("alert.exhaustion")
         alertAcceleration = Self.storedFlag("alert.acceleration")
+        lowBalanceThreshold = Self.storedLowThreshold()
         loadCache()
         loadHistory()
         seedHistoryFromCache()
@@ -316,6 +328,8 @@ final class UsageStore: ObservableObject {
     }
 
     var isRefreshing: Bool { fastRefreshing || qoderRefreshing }
+    var lowThreshold: Double { Double(lowBalanceThreshold) }
+    var lowRecovery: Double { lowThreshold + UsageAnalytics.lowRecoveryGap }
 
     func refreshAll() {
         refreshFast()
@@ -327,8 +341,8 @@ final class UsageStore: ObservableObject {
         fastRefreshing = true
         Task.detached(priority: .utility) { [weak self] in
             let run = CollectorRunner.run(provider: "fast")
+            guard let self else { return }
             await MainActor.run {
-                guard let self else { return }
                 if let output = run.output {
                     if let result = output.providers?["codex"] {
                         self.apply(result, to: .codex)
@@ -357,8 +371,8 @@ final class UsageStore: ObservableObject {
         qoderRefreshing = true
         Task.detached(priority: .utility) { [weak self] in
             let run = CollectorRunner.run(provider: "qoder")
+            guard let self else { return }
             await MainActor.run {
-                guard let self else { return }
                 if let output = run.output, let result = output.providers?["qoder"] {
                     self.apply(result, to: .qoder)
                 } else {
@@ -533,7 +547,8 @@ final class UsageStore: ObservableObject {
         return UsageAnalytics.forecast(
             provider: provider,
             input: usageInput(result),
-            samples: history(for: provider)
+            samples: history(for: provider),
+            lowThreshold: lowThreshold
         )
     }
 
@@ -636,6 +651,10 @@ final class UsageStore: ObservableObject {
         try? data.write(to: Self.historyURL, options: .atomic)
     }
 
+    func exportHistory() {
+        UsageExport.save(qoder: qoderHistory, workbuddy: workbuddyHistory, codex: codexHistory)
+    }
+
     private func evaluateAlerts(provider: UsageProvider, result: ProviderResult) {
         guard !notificationsDenied else { return }
         let input = usageInput(result)
@@ -654,16 +673,16 @@ final class UsageStore: ObservableObject {
         }
         let key = "alert.low.\(provider.rawValue).last"
         let defaults = UserDefaults.standard
-        if percent > UsageAnalytics.lowRecovery {
+        if percent > lowRecovery {
             defaults.removeObject(forKey: key)
             return
         }
-        guard percent <= UsageAnalytics.lowThreshold else { return }
+        guard percent <= lowThreshold else { return }
         let epoch = now.timeIntervalSince1970
         let last = defaults.double(forKey: key)
         guard last == 0 || epoch - last >= UsageAnalytics.lowCooldown else { return }
 
-        let threshold = Int(UsageAnalytics.lowThreshold)
+        let threshold = Int(lowThreshold)
         let rounded = Int(percent.rounded())
         let title: String
         let body: String
@@ -694,12 +713,13 @@ final class UsageStore: ObservableObject {
             provider: .codex,
             input: input,
             samples: codexHistory,
-            now: now
+            now: now,
+            lowThreshold: lowThreshold
         ) else { return }
         guard let risk = forecast.windows
             .filter({ $0.exhaustsBeforeReset })
             .min(by: { $0.exhaustAt < $1.exhaustAt }) else { return }
-        if alertLowBalance && risk.remainingPercent <= UsageAnalytics.lowThreshold {
+        if alertLowBalance && risk.remainingPercent <= lowThreshold {
             return
         }
         guard let reset = risk.resetsAt else { return }
@@ -726,7 +746,7 @@ final class UsageStore: ObservableObject {
         guard let percent = UsageAnalytics.currentPercent(provider: provider, input: input) else {
             return
         }
-        if alertLowBalance && percent <= UsageAnalytics.lowThreshold { return }
+        if alertLowBalance && percent <= lowThreshold { return }
 
         let rates = UsageAnalytics.rampRates(
             provider: provider,
@@ -785,6 +805,12 @@ final class UsageStore: ObservableObject {
                     onDelivered?()
                 }
             }
+        }
+    }
+
+    private func resetLowAlertState() {
+        for provider in UsageProvider.allCases {
+            UserDefaults.standard.removeObject(forKey: "alert.low.\(provider.rawValue).last")
         }
     }
 
@@ -969,7 +995,7 @@ struct Sparkline: View {
                     .frame(maxHeight: .infinity)
             }
         }
-        .accessibilityLabel("近 7 天剩余比例趋势")
+        .accessibilityLabel("近 7 天剩余趋势")
     }
 
     private func points(in size: CGSize) -> [CGPoint] {
@@ -1141,21 +1167,34 @@ extension UsageStore {
     var menuBarTooltip: String {
         var parts: [String] = []
         if let qoder, qoder.ok == true {
-            parts.append("Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits")
+            var line = "Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits"
+            if let suffix = forecastSuffix(for: .qoder) { line += " · \(suffix)" }
+            parts.append(line)
         } else {
             parts.append("Qoder 不可用")
         }
         if let workbuddy, workbuddy.ok == true {
-            parts.append("WorkBuddy 剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(workbuddy.total)) credits")
+            var line = "WorkBuddy 剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(workbuddy.total)) credits"
+            if let suffix = forecastSuffix(for: .workbuddy) { line += " · \(suffix)" }
+            parts.append(line)
         } else {
             parts.append("WorkBuddy 不可用")
         }
         if let codex, codex.ok == true, let window = codex.primaryWindow {
-            parts.append("Codex \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))")
+            var line = "Codex \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))"
+            if let suffix = forecastSuffix(for: .codex) { line += " · \(suffix)" }
+            parts.append(line)
         } else {
             parts.append("Codex 不可用")
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func forecastSuffix(for provider: UsageProvider) -> String? {
+        guard let forecast = forecast(for: provider), forecast.text != "样本积累中" else {
+            return nil
+        }
+        return forecast.text
     }
 
     private var qoderText: String {
@@ -1668,36 +1707,71 @@ struct MenuContent: View {
     }
 
     private var alertSettings: some View {
-        HStack(spacing: 6) {
-            Text("智能预警")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            settingChip(
-                "低额度",
-                color: Theme.warning,
-                isOn: $store.alertLowBalance,
-                iconOn: "exclamationmark.triangle.fill",
-                iconOff: "exclamationmark.triangle",
-                help: "剩余低于 20% 时提醒"
-            )
-            settingChip(
-                "重置前耗尽",
-                color: Theme.warning,
-                isOn: $store.alertExhaustion,
-                iconOn: "clock.fill",
-                iconOff: "clock",
-                help: "Codex 预计在额度重置前耗尽时提醒"
-            )
-            settingChip(
-                "消耗加速",
-                color: Theme.warning,
-                isOn: $store.alertAcceleration,
-                iconOn: "bolt.fill",
-                iconOff: "bolt",
-                help: "近 15 分钟消耗速度明显高于此前 1 小时时提醒"
-            )
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("智能预警")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                settingChip(
+                    "低额度",
+                    color: Theme.warning,
+                    isOn: $store.alertLowBalance,
+                    iconOn: "exclamationmark.triangle.fill",
+                    iconOff: "exclamationmark.triangle",
+                    help: "剩余低于 \(store.lowBalanceThreshold)% 时提醒"
+                )
+                settingChip(
+                    "重置前耗尽",
+                    color: Theme.warning,
+                    isOn: $store.alertExhaustion,
+                    iconOn: "clock.fill",
+                    iconOff: "clock",
+                    help: "Codex 预计在额度重置前耗尽时提醒"
+                )
+                settingChip(
+                    "消耗加速",
+                    color: Theme.warning,
+                    isOn: $store.alertAcceleration,
+                    iconOn: "bolt.fill",
+                    iconOff: "bolt",
+                    help: "近 15 分钟消耗速度明显高于此前 1 小时时提醒"
+                )
+            }
+            if store.alertLowBalance {
+                HStack(spacing: 5) {
+                    Text("低额度阈值")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 4)
+                    ForEach([10, 20, 30], id: \.self) { value in
+                        thresholdChip(value)
+                    }
+                }
+            }
         }
+    }
+
+    private func thresholdChip(_ value: Int) -> some View {
+        let selected = store.lowBalanceThreshold == value
+        return Button("\(value)%") {
+            store.lowBalanceThreshold = value
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 9, weight: selected ? .semibold : .regular))
+        .foregroundStyle(selected ? Theme.warning : Color.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(
+            Capsule().fill(selected ? Theme.warning.opacity(0.14) : Color.primary.opacity(0.04))
+        )
+        .overlay(
+            Capsule().stroke(
+                selected ? Theme.warning.opacity(0.28) : Color.primary.opacity(0.08),
+                lineWidth: 0.5
+            )
+        )
+        .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
     }
 
     private func settingChip(
@@ -1822,6 +1896,13 @@ struct MenuContent: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             Spacer()
+            Button("导出") {
+                store.exportHistory()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .help("导出近 14 天用量历史为 CSV")
             Button("退出") {
                 NSApplication.shared.terminate(nil)
             }

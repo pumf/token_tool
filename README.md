@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.0**（build 6） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.1**（build 7） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -15,10 +15,11 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **用量洞察**：按本机历史采样估算今日消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder 未登录 / 未安装时额外提供「终端登录」「安装 CLI」按钮。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
-- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余比例曲线，并按近期消耗速度估算额度耗尽时间；Codex 会判断能否撑到窗口重置。
-- **智能预警**：支持低额度（剩余 ≤ 20%）、预计重置前耗尽、消耗突然加速三类本地通知，可独立开关。
+- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本），Codex 按窗口内消耗速度判断能否撑到重置。
+- **智能预警**：低额度阈值可选 10% / 20% / 30%（默认 20%，持久保存），另有预计重置前耗尽、消耗突然加速两类本地通知，均可独立开关。
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
-- **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动「检查更新」；发现新版本后自动匹配当前芯片下载 DMG 并打开，拖入「应用程序」即可完成升级。
+- **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动「检查更新」；发现新版本后自动匹配当前芯片下载 DMG 并打开，下载完成时校验 Release 说明中的 SHA-256，拖入「应用程序」即可完成升级。
+- **CSV 导出**：面板底部「导出」按钮可将近 14 天用量历史导出为 CSV，便于离线分析。
 - **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
@@ -61,13 +62,13 @@ Q 1,770   W 12,480   C 8.5%
 
 | 按钮 | 行为 |
 | --- | --- |
-| `低额度` | 任一平台剩余比例降至 20% 及以下时提醒，恢复至 25% 以上后重新布防 |
+| `低额度` | 任一平台剩余比例降至阈值及以下时提醒（阈值可选 10% / 20% / 30%，默认 20%），恢复至阈值 +5% 以上后重新布防 |
 | `重置前耗尽` | Codex 按近期速度预计会在限额窗口重置前用完时提醒 |
 | `消耗加速` | 近 15 分钟消耗速度达到此前 1 小时的 2.5 倍以上时提醒 |
 
-预警均为本机通知，并带冷却时间去重，避免短时间内重复弹出。预测基于历史消耗速度，领取额度或窗口重置后需要几个采样点重新稳定，仅供提前预警参考。
+预警均为本机通知，并带冷却时间去重，避免短时间内重复弹出。Qoder / WorkBuddy 的耗尽预测与「净日均消耗」同口径：剔除每日领取、重置与套餐总量变化的影响，领取覆盖消耗时提示「按当前节奏不会耗尽」，样本不足时先显示「样本积累中」，仅供提前预警参考。
 
-卡片底部会出现一条趋势行：左侧是近 7 天剩余比例曲线，右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
+卡片底部会出现一条趋势行：左侧是近 7 天剩余曲线（Qoder / WorkBuddy 为剩余 Credits，Codex 为剩余比例），右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
 
 趋势行上方会显示「今日消耗 · 近 7 日日均」；日均至少需要 6 小时历史样本，数据不足时显示 `--`。
 
@@ -75,9 +76,10 @@ Q 1,770   W 12,480   C 8.5%
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.0` | 当前安装版本 |
+| `v1.4.1` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
+| `导出` | 将近 14 天用量历史导出为 CSV 文件 |
 | `检查更新` / `已是最新` / `重试检查` | 手动检查 GitHub Releases；失败时悬停可查看原因 |
 
 ### 版本与更新
@@ -85,7 +87,7 @@ Q 1,770   W 12,480   C 8.5%
 - 应用启动后及面板打开时会检查更新，自动检查最多每 24 小时一次；底部按钮可随时手动检查。
 - 优先请求 GitHub Releases API；若 API 被限流或不可用，会自动回退到发布页，不要求登录或 Token。
 - 发现新版本时，面板顶部显示「新版本 x.y.z 可用」，并下载与当前芯片匹配的安装包：arm64 选 `-arm64.dmg`，Intel 选 `-x86_64.dmg`，找不到时使用通用 DMG。
-- 下载完成后自动打开 DMG，将 **TokenTool** 拖入「应用程序」覆盖旧版本即可；应用不会静默替换自身，避免 ad-hoc 签名应用的权限与 Gatekeeper 问题。
+- 下载完成后校验安装包 SHA-256（与 Release 说明「校验」一节比对，未提供校验值时跳过），通过后自动打开 DMG，将 **TokenTool** 拖入「应用程序」覆盖旧版本即可；应用不会静默替换自身，避免 ad-hoc 签名应用的权限与 Gatekeeper 问题。
 - 更新检查遵循系统代理设置；若使用代理访问 GitHub，请确认「系统设置 → 网络 → 代理」已配置。
 - 更新检查只读取版本号与安装包地址，不上传任何账号、额度或使用数据。
 
@@ -108,9 +110,9 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1.zip) |
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -222,6 +224,17 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.4.1
+
+- 耗尽预测改为按「净日均消耗」计算：剔除每日领取 / 重置带来的增加与套餐总量变化干扰，领取覆盖消耗时提示「按当前节奏不会耗尽」。
+- 日均消耗改按实际观察时长折算，跨零点或不足整天时不再被稀释成多天。
+- 趋势曲线改为绘制剩余 Credits，套餐总量变化不再造成曲线假跳变。
+- 低额度阈值可在 10% / 20% / 30% 间切换（默认 20%），并持久保存。
+- 更新安装包下载完成后自动校验 Release 说明中的 SHA-256，校验失败自动删除并提示。
+- 菜单栏 tooltip 追加各平台预测结论。
+- 新增 CSV 导出：面板底部「导出」按钮可导出近 14 天用量历史。
+- 历史样本不足 6 小时时预测显示「样本积累中」，并在 tooltip 标注估算口径与已观察天数。
+
 ### 1.4.0
 
 - 新增自适应详情面板：按屏幕可用高度调整，小屏自动滚动，底部设置不再被裁切。
@@ -279,7 +292,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.0（build 6） |
+| 当前版本 | 1.4.1（build 7） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
