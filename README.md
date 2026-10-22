@@ -11,8 +11,11 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **详情面板**：套餐名称、Credits 进度条、剩余 / 总量、限额窗口、重置时间、最后更新时间与错误状态。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder 未登录 / 未安装时额外提供「终端登录」「安装 CLI」按钮。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
+- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余比例曲线，并按近期消耗速度估算额度耗尽时间；Codex 会判断能否撑到窗口重置。
+- **智能预警**：支持低额度（剩余 ≤ 20%）、预计重置前耗尽、消耗突然加速三类本地通知，可独立开关。
+- **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
-- **本地缓存**：启动时先展示上次数据，再异步更新。
+- **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
 - **开机启动**：面板一键开关，通过 LaunchAgent 实现，不产生 Dock 图标。
 - **原生安装包**：分别提供 Apple Silicon（arm64）与 Intel（x86_64）安装包，另附通用二进制，最低 macOS 13。
 - **应用图标**：三色环形仪表盘图标，安装后可在访达、启动台与 DMG 中识别。
@@ -46,7 +49,19 @@ Q 1,770   W 12,480   C 8.5%
 | `WorkBuddy 00:00` | 每天 00:00 提醒领取 100 积分 |
 | `Codex 重置` | 在当前最长限额窗口重置时提醒 |
 
-首次开启提醒会请求系统通知权限；若系统通知被关闭，面板会显示提示和「去开启」入口。
+首次开启提醒或预警会请求系统通知权限；若系统通知被关闭，面板会显示提示和「去开启」入口。
+
+「智能预警」一行的三个按钮：
+
+| 按钮 | 行为 |
+| --- | --- |
+| `低额度` | 任一平台剩余比例降至 20% 及以下时提醒，恢复至 25% 以上后重新布防 |
+| `重置前耗尽` | Codex 按近期速度预计会在限额窗口重置前用完时提醒 |
+| `消耗加速` | 近 15 分钟消耗速度达到此前 1 小时的 2.5 倍以上时提醒 |
+
+预警均为本机通知，并带冷却时间去重，避免短时间内重复弹出。预测基于历史消耗速度，领取额度或窗口重置后需要几个采样点重新稳定，仅供提前预警参考。
+
+卡片底部会出现一条趋势行：左侧是近 7 天剩余比例曲线，右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
 
 ## 环境要求
 
@@ -67,9 +82,9 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.2.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.2.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.2.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.2.1/TokenTool-1.2.1.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.3.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.3.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.3.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0.zip) |
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -125,10 +140,12 @@ open /Applications/TokenTool.app
 
 - 应用不会打印或保存 token、refresh token、密码、邮箱、UIN 等敏感信息。
 - 提醒由 macOS 本地通知调度，不经过任何服务器。
-- 缓存仅包含套餐、额度、百分比、时间戳等展示数据，路径为：
+- 缓存与历史仅包含套餐、额度、百分比、时间戳等展示数据，路径为：
   ```
   ~/Library/Application Support/TokenTool/cache.json
+  ~/Library/Application Support/TokenTool/history.json
   ```
+- 历史快照最多保留 14 天，用于趋势与耗尽预测；不包含任何账号凭据。
 - 清除缓存：退出应用后删除上述文件即可。
 - 用量接口可能随官方客户端升级而变化；如遇读取失败，请先更新对应客户端或 CLI。
 
@@ -162,7 +179,8 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 .
 ├── TokenToolApp.swift   # MenuBarExtra 入口，无 Dock 图标
-├── Views.swift          # 菜单栏标签、详情面板、数据状态与刷新调度
+├── Views.swift          # 菜单栏标签、详情面板、数据状态、通知与刷新调度
+├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
 ├── AppIcon.icns         # 应用图标
 ├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
@@ -171,6 +189,13 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.3.0
+
+- 新增近 7 天用量趋势曲线与额度耗尽时间预测。
+- 新增低额度、重置前耗尽、消耗加速三类智能预警，均可独立开关。
+- 通知支持快捷动作，点击后直接打开对应客户端。
+- 历史快照保留 14 天，用于趋势和预测；不记录任何账号凭据。
 
 ### 1.2.1
 

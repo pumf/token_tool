@@ -56,6 +56,20 @@ struct CollectorOutput: Decodable, Sendable {
     let providers: [String: ProviderResult]?
 }
 
+enum NotificationCategory {
+    static let qoder = "provider.qoder"
+    static let workbuddy = "provider.workbuddy"
+    static let codex = "provider.codex"
+
+    static func forProvider(_ provider: UsageProvider) -> String {
+        switch provider {
+        case .qoder: return qoder
+        case .workbuddy: return workbuddy
+        case .codex: return codex
+        }
+    }
+}
+
 enum CollectorRunner {
     struct RunResult: Sendable {
         let output: CollectorOutput?
@@ -206,7 +220,28 @@ final class UsageStore: ObservableObject {
             reminderSettingChanged()
         }
     }
+    @Published var alertLowBalance: Bool {
+        didSet {
+            UserDefaults.standard.set(alertLowBalance, forKey: "alert.low")
+            prepareNotificationAuthorization()
+        }
+    }
+    @Published var alertExhaustion: Bool {
+        didSet {
+            UserDefaults.standard.set(alertExhaustion, forKey: "alert.exhaustion")
+            prepareNotificationAuthorization()
+        }
+    }
+    @Published var alertAcceleration: Bool {
+        didSet {
+            UserDefaults.standard.set(alertAcceleration, forKey: "alert.acceleration")
+            prepareNotificationAuthorization()
+        }
+    }
     @Published private(set) var notificationsDenied = false
+    @Published private var qoderHistory: [UsageSample] = []
+    @Published private var workbuddyHistory: [UsageSample] = []
+    @Published private var codexHistory: [UsageSample] = []
 
     private enum ReminderID {
         static let qoder = "reminder.qoder.claim"
@@ -214,7 +249,7 @@ final class UsageStore: ObservableObject {
         static let codex = "reminder.codex.reset"
     }
 
-    private let notificationCenter = UNUserNotificationCenter.current()
+    private lazy var notificationCenter = UNUserNotificationCenter.current()
 
     private struct CacheFile: Codable {
         var codex: ProviderResult?
@@ -224,9 +259,20 @@ final class UsageStore: ObservableObject {
         var qoderAt: Double?
     }
 
+    private struct HistoryFile: Codable {
+        var qoder: [UsageSample]?
+        var workbuddy: [UsageSample]?
+        var codex: [UsageSample]?
+    }
+
     private static var cacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TokenTool/cache.json")
+    }
+
+    private static var historyURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TokenTool/history.json")
     }
 
     private enum Provider { case codex, workbuddy, qoder }
@@ -244,7 +290,12 @@ final class UsageStore: ObservableObject {
         remindQoderClaim = Self.storedFlag("reminder.qoder.claim")
         remindWorkBuddyClaim = Self.storedFlag("reminder.workbuddy.claim")
         remindCodexReset = Self.storedFlag("reminder.codex.reset")
+        alertLowBalance = Self.storedFlag("alert.low")
+        alertExhaustion = Self.storedFlag("alert.exhaustion")
+        alertAcceleration = Self.storedFlag("alert.acceleration")
         loadCache()
+        loadHistory()
+        seedHistoryFromCache()
         guard refreshOnStart else { return }
         refreshReminders()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -346,7 +397,8 @@ final class UsageStore: ObservableObject {
     }
 
     private func prepareNotificationAuthorization() {
-        guard remindQoderClaim || remindWorkBuddyClaim || remindCodexReset else { return }
+        guard remindQoderClaim || remindWorkBuddyClaim || remindCodexReset
+                || alertLowBalance || alertExhaustion || alertAcceleration else { return }
         let center = notificationCenter
         center.getNotificationSettings { [weak self] settings in
             switch settings.authorizationStatus {
@@ -380,7 +432,8 @@ final class UsageStore: ObservableObject {
                 title: "Qoder 今日 100 Credits 可领取",
                 body: "打开 Qoder 领取今日额度。",
                 hour: 10,
-                minute: 0
+                minute: 0,
+                category: NotificationCategory.qoder
             )
         }
         if remindWorkBuddyClaim {
@@ -389,17 +442,26 @@ final class UsageStore: ObservableObject {
                 title: "WorkBuddy 今日 100 积分可领取",
                 body: "打开 WorkBuddy 领取今日积分。",
                 hour: 0,
-                minute: 0
+                minute: 0,
+                category: NotificationCategory.workbuddy
             )
         }
         scheduleCodexReminder()
     }
 
-    private func addDailyReminder(id: String, title: String, body: String, hour: Int, minute: Int) {
+    private func addDailyReminder(
+        id: String,
+        title: String,
+        body: String,
+        hour: Int,
+        minute: Int,
+        category: String
+    ) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        content.categoryIdentifier = category
         var components = DateComponents()
         components.hour = hour
         components.minute = minute
@@ -423,6 +485,7 @@ final class UsageStore: ObservableObject {
         content.title = "Codex \(Format.window(window.windowMinutes))额度已重置"
         content.body = "额度窗口已刷新，可以继续使用。"
         content.sound = .default
+        content.categoryIdentifier = NotificationCategory.codex
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: TimeInterval(reset - now) + 30,
             repeats: false
@@ -454,6 +517,265 @@ final class UsageStore: ObservableObject {
         case .qoder:
             qoder = result
             qoderError = nil
+        }
+        let usageProvider: UsageProvider
+        switch provider {
+        case .codex: usageProvider = .codex
+        case .workbuddy: usageProvider = .workbuddy
+        case .qoder: usageProvider = .qoder
+        }
+        recordHistory(provider: usageProvider, result: result)
+        evaluateAlerts(provider: usageProvider, result: result)
+    }
+
+    func forecast(for provider: UsageProvider) -> UsageForecast? {
+        guard let result = currentResult(for: provider), result.ok == true else { return nil }
+        return UsageAnalytics.forecast(
+            provider: provider,
+            input: usageInput(result),
+            samples: history(for: provider)
+        )
+    }
+
+    private func currentResult(for provider: UsageProvider) -> ProviderResult? {
+        switch provider {
+        case .qoder: return qoder
+        case .workbuddy: return workbuddy
+        case .codex: return codex
+        }
+    }
+
+    private func usageInput(_ result: ProviderResult) -> UsageInput {
+        UsageInput(
+            remaining: result.remaining,
+            total: result.total,
+            remainingPercent: result.remainingPercent,
+            windows: (result.windows ?? []).map {
+                UsageWindow(
+                    minutes: $0.windowMinutes,
+                    remainingPercent: $0.remainingPercent,
+                    usedPercent: $0.usedPercent,
+                    resetsAt: $0.resetsAt
+                )
+            }
+        )
+    }
+
+    private func history(for provider: UsageProvider) -> [UsageSample] {
+        switch provider {
+        case .qoder: return qoderHistory
+        case .workbuddy: return workbuddyHistory
+        case .codex: return codexHistory
+        }
+    }
+
+    private func setHistory(_ samples: [UsageSample], for provider: UsageProvider) {
+        switch provider {
+        case .qoder: qoderHistory = samples
+        case .workbuddy: workbuddyHistory = samples
+        case .codex: codexHistory = samples
+        }
+    }
+
+    private func loadHistory() {
+        guard let data = try? Data(contentsOf: Self.historyURL),
+              let file = try? JSONDecoder().decode(HistoryFile.self, from: data) else { return }
+        let now = Date()
+        qoderHistory = UsageAnalytics.prune(file.qoder ?? [], now: now)
+        workbuddyHistory = UsageAnalytics.prune(file.workbuddy ?? [], now: now)
+        codexHistory = UsageAnalytics.prune(file.codex ?? [], now: now)
+    }
+
+    private func seedHistoryFromCache() {
+        let cached: [(UsageProvider, ProviderResult?)] = [
+            (.qoder, qoder),
+            (.workbuddy, workbuddy),
+            (.codex, codex),
+        ]
+        for (provider, result) in cached {
+            guard let result, result.ok == true, let date = result.updatedDate else { continue }
+            recordHistory(provider: provider, result: result, at: date)
+        }
+    }
+
+    private func recordHistory(provider: UsageProvider, result: ProviderResult, at date: Date? = nil) {
+        let timestamp = date ?? result.updatedDate ?? Date()
+        let input = usageInput(result)
+        guard let sample = UsageAnalytics.sample(provider: provider, input: input, at: timestamp) else {
+            return
+        }
+        var samples = history(for: provider)
+        if let last = samples.last,
+           sample.at - last.at < Int(UsageAnalytics.sampleInterval) {
+            return
+        }
+        samples.append(sample)
+        samples = UsageAnalytics.prune(samples)
+        setHistory(samples, for: provider)
+        saveHistory()
+    }
+
+    private func saveHistory() {
+        let file = HistoryFile(
+            qoder: qoderHistory,
+            workbuddy: workbuddyHistory,
+            codex: codexHistory
+        )
+        guard let data = try? JSONEncoder().encode(file) else { return }
+        let directory = Self.historyURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: Self.historyURL, options: .atomic)
+    }
+
+    private func evaluateAlerts(provider: UsageProvider, result: ProviderResult) {
+        guard !notificationsDenied else { return }
+        let input = usageInput(result)
+        let now = Date()
+        evaluateLowAlert(provider: provider, input: input, now: now)
+        if provider == .codex {
+            evaluateExhaustionAlert(input: input, now: now)
+        }
+        evaluateAccelerationAlert(provider: provider, input: input, now: now)
+    }
+
+    private func evaluateLowAlert(provider: UsageProvider, input: UsageInput, now: Date) {
+        guard alertLowBalance else { return }
+        guard let percent = UsageAnalytics.currentPercent(provider: provider, input: input) else {
+            return
+        }
+        let key = "alert.low.\(provider.rawValue).last"
+        let defaults = UserDefaults.standard
+        if percent > UsageAnalytics.lowRecovery {
+            defaults.removeObject(forKey: key)
+            return
+        }
+        guard percent <= UsageAnalytics.lowThreshold else { return }
+        let epoch = now.timeIntervalSince1970
+        let last = defaults.double(forKey: key)
+        guard last == 0 || epoch - last >= UsageAnalytics.lowCooldown else { return }
+
+        let threshold = Int(UsageAnalytics.lowThreshold)
+        let rounded = Int(percent.rounded())
+        let title: String
+        let body: String
+        if provider == .codex, let window = UsageAnalytics.lowestWindow(of: input) {
+            title = "Codex \(UsageAnalytics.windowText(window.minutes))窗口低于 \(threshold)%"
+            body = "当前剩余 \(rounded)%，请留意额度消耗或等待重置。"
+        } else {
+            title = "\(provider.displayName) 剩余低于 \(threshold)%"
+            if let remaining = input.remaining {
+                body = "当前剩余 \(Format.credits(remaining)) Credits（\(rounded)%），请及时领取或调整使用。"
+            } else {
+                body = "当前剩余 \(rounded)%，请及时领取或调整使用。"
+            }
+        }
+        deliverAlert(
+            id: "alert.low.\(provider.rawValue)",
+            title: title,
+            body: body,
+            provider: provider
+        ) {
+            defaults.set(epoch, forKey: key)
+        }
+    }
+
+    private func evaluateExhaustionAlert(input: UsageInput, now: Date) {
+        guard alertExhaustion else { return }
+        guard let forecast = UsageAnalytics.forecast(
+            provider: .codex,
+            input: input,
+            samples: codexHistory,
+            now: now
+        ) else { return }
+        guard let risk = forecast.windows
+            .filter({ $0.exhaustsBeforeReset })
+            .min(by: { $0.exhaustAt < $1.exhaustAt }) else { return }
+        if alertLowBalance && risk.remainingPercent <= UsageAnalytics.lowThreshold {
+            return
+        }
+        guard let reset = risk.resetsAt else { return }
+
+        let defaults = UserDefaults.standard
+        let key = "alert.codex.exhaust.\(risk.minutes)"
+        let resetEpoch = Int(reset.timeIntervalSince1970)
+        guard defaults.integer(forKey: key) != resetEpoch else { return }
+
+        let title = "Codex \(UsageAnalytics.windowText(risk.minutes))窗口可能在重置前耗尽"
+        let body = "剩余 \(Int(risk.remainingPercent.rounded()))%，按近期速度预计 \(Format.reset(Int(risk.exhaustAt.timeIntervalSince1970))) 耗尽，早于重置时间 \(Format.reset(resetEpoch))。"
+        deliverAlert(
+            id: "alert.codex.exhaust.\(risk.minutes)",
+            title: title,
+            body: body,
+            provider: .codex
+        ) {
+            defaults.set(resetEpoch, forKey: key)
+        }
+    }
+
+    private func evaluateAccelerationAlert(provider: UsageProvider, input: UsageInput, now: Date) {
+        guard alertAcceleration else { return }
+        guard let percent = UsageAnalytics.currentPercent(provider: provider, input: input) else {
+            return
+        }
+        if alertLowBalance && percent <= UsageAnalytics.lowThreshold { return }
+
+        let rates = UsageAnalytics.rampRates(
+            provider: provider,
+            input: input,
+            samples: history(for: provider),
+            now: now
+        )
+        guard let short = rates.short,
+              let baseline = rates.baseline,
+              baseline >= 0.2,
+              short >= UsageAnalytics.rampMinimumRate,
+              short >= baseline * UsageAnalytics.rampRatio else { return }
+
+        let defaults = UserDefaults.standard
+        let key = "alert.ramp.\(provider.rawValue).last"
+        let epoch = now.timeIntervalSince1970
+        let last = defaults.double(forKey: key)
+        guard last == 0 || epoch - last >= UsageAnalytics.rampCooldown else { return }
+
+        let ratio = short / baseline
+        let body = "近 15 分钟消耗速度约为此前 1 小时的 \(String(format: "%.1f", ratio)) 倍，当前剩余 \(Int(percent.rounded()))%，请留意额度消耗。"
+        deliverAlert(
+            id: "alert.ramp.\(provider.rawValue)",
+            title: "\(provider.displayName) 消耗速度明显加快",
+            body: body,
+            provider: provider
+        ) {
+            defaults.set(epoch, forKey: key)
+        }
+    }
+
+    private func deliverAlert(
+        id: String,
+        title: String,
+        body: String,
+        provider: UsageProvider,
+        onDelivered: (() -> Void)? = nil
+    ) {
+        let center = notificationCenter
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            content.categoryIdentifier = NotificationCategory.forProvider(provider)
+            content.threadIdentifier = "alerts.\(provider.rawValue)"
+            let request = UNNotificationRequest(
+                identifier: "\(id).\(Int(Date().timeIntervalSince1970))",
+                content: content,
+                trigger: nil
+            )
+            center.add(request) { error in
+                if error == nil {
+                    onDelivered?()
+                }
+            }
         }
     }
 
@@ -601,6 +923,82 @@ struct UsageBar: View {
             .frame(height: 5)
             .animation(.easeOut(duration: 0.25), value: normalized)
         }
+    }
+}
+
+struct Sparkline: View {
+    let values: [Double]
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            let points = self.points(in: geometry.size)
+            if points.count >= 2, let last = points.last {
+                ZStack {
+                    areaPath(points: points, height: geometry.size.height)
+                        .fill(
+                            LinearGradient(
+                                colors: [tint.opacity(0.16), tint.opacity(0.01)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    linePath(points: points)
+                        .stroke(
+                            tint,
+                            style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round)
+                        )
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 3, height: 3)
+                        .position(last)
+                }
+            } else {
+                Capsule()
+                    .fill(tint.opacity(0.12))
+                    .frame(height: 2)
+                    .frame(maxHeight: .infinity)
+            }
+        }
+        .accessibilityLabel("近 7 天剩余比例趋势")
+    }
+
+    private func points(in size: CGSize) -> [CGPoint] {
+        guard values.count >= 2, size.width > 0, size.height > 0 else { return [] }
+        let minimum = values.min() ?? 0
+        let maximum = values.max() ?? 100
+        let low = max(0, minimum - 4)
+        let high = min(100, maximum + 4)
+        let span = max(high - low, 4)
+        return values.enumerated().map { index, value in
+            let x = size.width * CGFloat(index) / CGFloat(values.count - 1)
+            let normalized = (value - low) / span
+            let y = size.height - CGFloat(normalized) * max(1, size.height - 3) - 1.5
+            return CGPoint(x: x, y: min(max(y, 1), size.height - 1))
+        }
+    }
+
+    private func linePath(points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        return path
+    }
+
+    private func areaPath(points: [CGPoint], height: CGFloat) -> Path {
+        var path = Path()
+        guard let first = points.first, let last = points.last else { return path }
+        path.move(to: CGPoint(x: first.x, y: height))
+        path.addLine(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.addLine(to: CGPoint(x: last.x, y: height))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -791,6 +1189,7 @@ struct MenuContent: View {
             codexCard
             menuBarSettings
             reminderSettings
+            alertSettings
             Divider()
             footer
         }
@@ -875,6 +1274,7 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                forecastRow(.qoder, tint: Theme.qoder)
             } else {
                 emptyContent
             }
@@ -906,6 +1306,7 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                forecastRow(.workbuddy, tint: Theme.workbuddy)
             } else if store.workbuddy != nil {
                 Text("暂无可用的 Credits 资源包")
                     .font(.system(size: 11))
@@ -958,9 +1359,26 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                forecastRow(.codex, tint: Theme.codex)
             } else {
                 emptyContent
             }
+        }
+    }
+
+    @ViewBuilder
+    private func forecastRow(_ provider: UsageProvider, tint: Color) -> some View {
+        if let forecast = store.forecast(for: provider) {
+            HStack(spacing: 7) {
+                Sparkline(values: forecast.values, tint: tint)
+                    .frame(width: 58, height: 16)
+                Text(forecast.text)
+                    .font(.system(size: 9, weight: forecast.warning ? .semibold : .regular))
+                    .foregroundStyle(forecast.warning ? Theme.warning : Color.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .help(forecast.help)
         }
     }
 
@@ -1137,7 +1555,7 @@ struct MenuContent: View {
                 HStack(spacing: 4) {
                     Image(systemName: "bell.slash.fill")
                         .font(.system(size: 8, weight: .semibold))
-                    Text("系统通知未授权，提醒不会弹出")
+                    Text("系统通知未授权，提醒与预警不会弹出")
                     Spacer(minLength: 4)
                     Button("去开启") {
                         Apps.openURL("x-apple.systempreferences:com.apple.preference.notifications")
@@ -1149,6 +1567,39 @@ struct MenuContent: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var alertSettings: some View {
+        HStack(spacing: 6) {
+            Text("智能预警")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            settingChip(
+                "低额度",
+                color: Theme.warning,
+                isOn: $store.alertLowBalance,
+                iconOn: "exclamationmark.triangle.fill",
+                iconOff: "exclamationmark.triangle",
+                help: "剩余低于 20% 时提醒"
+            )
+            settingChip(
+                "重置前耗尽",
+                color: Theme.warning,
+                isOn: $store.alertExhaustion,
+                iconOn: "clock.fill",
+                iconOff: "clock",
+                help: "Codex 预计在额度重置前耗尽时提醒"
+            )
+            settingChip(
+                "消耗加速",
+                color: Theme.warning,
+                isOn: $store.alertAcceleration,
+                iconOn: "bolt.fill",
+                iconOff: "bolt",
+                help: "近 15 分钟消耗速度明显高于此前 1 小时时提醒"
+            )
         }
     }
 
