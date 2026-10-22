@@ -66,6 +66,13 @@ struct UsageForecast: Sendable {
     let windows: [WindowProjection]
 }
 
+struct UsageInsight: Sendable {
+    let todayConsumed: Double?
+    let dailyAverage: Double?
+    let observedDays: Int
+    let isPercent: Bool
+}
+
 enum UsageAnalytics {
     static let historyRetentionDays = 14
     static let chartDays = 7
@@ -81,6 +88,7 @@ enum UsageAnalytics {
     static let rampBaselineStart: TimeInterval = 4500
     static let rampRatio = 2.5
     static let rampMinimumRate = 1.5
+    static let minimumInsightSpan: TimeInterval = 6 * 3600
 
     private static let jumpThreshold = 0.75
     private static let day: TimeInterval = 86400
@@ -157,6 +165,88 @@ enum UsageAnalytics {
         case .codex:
             return codexForecast(input: input, samples: samples, now: now)
         }
+    }
+
+    static func insight(
+        provider: UsageProvider,
+        input: UsageInput,
+        samples: [UsageSample],
+        now: Date = Date()
+    ) -> UsageInsight? {
+        let nowTs = now.timeIntervalSince1970
+        let windowStart = nowTs - TimeInterval(chartDays) * day
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: now).timeIntervalSince1970
+
+        var points: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
+        switch provider {
+        case .qoder, .workbuddy:
+            for sample in samples {
+                guard Double(sample.at) >= windowStart, let remaining = sample.remaining else { continue }
+                points.append((Double(sample.at), remaining, sample.total, nil))
+            }
+        case .codex:
+            guard let primary = input.windows.first else { return nil }
+            for sample in samples {
+                guard Double(sample.at) >= windowStart,
+                      let item = sample.windows?.first(where: { $0.minutes == primary.minutes }) else { continue }
+                if let currentReset = primary.resetsAt,
+                   let sampleReset = item.resetsAt,
+                   currentReset != sampleReset {
+                    continue
+                }
+                points.append((Double(sample.at), item.remainingPercent, nil, item.resetsAt))
+            }
+        }
+        points.sort { $0.at < $1.at }
+        guard points.count >= 2, let first = points.first, let last = points.last else { return nil }
+
+        var totalConsumed: Double = 0
+        var todayConsumed: Double = 0
+        var hasTodayPair = false
+        for index in 1..<points.count {
+            let previous = points[index - 1]
+            let current = points[index]
+            let span = current.at - previous.at
+            guard span > 0 else { continue }
+            if let previousTotal = previous.total,
+               let currentTotal = current.total,
+               abs(previousTotal - currentTotal) > 0.5 {
+                continue
+            }
+            if provider == .codex,
+               let previousReset = previous.reset,
+               let currentReset = current.reset,
+               previousReset != currentReset {
+                continue
+            }
+            let consumed = previous.value - current.value
+            let endsToday = current.at >= todayStart
+            if endsToday { hasTodayPair = true }
+            guard consumed > 0 else { continue }
+            totalConsumed += consumed
+            guard endsToday else { continue }
+            if previous.at < todayStart {
+                todayConsumed += consumed * min(1, (current.at - todayStart) / span)
+            } else {
+                todayConsumed += consumed
+            }
+        }
+
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: first.at))
+        let todayDay = calendar.startOfDay(for: now)
+        let dayDiff = calendar.dateComponents([.day], from: firstDay, to: todayDay).day ?? 0
+        let observedDays = min(chartDays, max(1, dayDiff + 1))
+        let dailyAverage = last.at - first.at >= minimumInsightSpan
+            ? totalConsumed / Double(observedDays)
+            : nil
+
+        return UsageInsight(
+            todayConsumed: hasTodayPair ? todayConsumed : nil,
+            dailyAverage: dailyAverage,
+            observedDays: observedDays,
+            isPercent: provider == .codex
+        )
     }
 
     static func rampRates(

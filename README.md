@@ -2,18 +2,24 @@
 
 macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBuddy**、**Codex** 的额度与剩余用量。
 
-无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。
+无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
+
+当前版本：**1.4.0**（build 6） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
 - **菜单栏常驻**：紧凑显示三家的关键指标（Qoder 剩余积分、WorkBuddy 剩余积分、Codex 已用比例），带完整 tooltip。
 - **独立显示开关**：面板底部可分别隐藏 / 显示 Qoder、WorkBuddy、Codex；全部隐藏时仍保留一个 `AI` 入口，点击照常展开面板，数据也继续在后台采集。
+- **自适应面板**：面板高度随屏幕可用区域自动调整；屏幕较小时内容可滚动，不再被裁切。
 - **详情面板**：套餐名称、Credits 进度条、剩余 / 总量、限额窗口、重置时间、最后更新时间与错误状态。
+- **用量洞察**：按本机历史采样估算今日消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder 未登录 / 未安装时额外提供「终端登录」「安装 CLI」按钮。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
 - **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余比例曲线，并按近期消耗速度估算额度耗尽时间；Codex 会判断能否撑到窗口重置。
 - **智能预警**：支持低额度（剩余 ≤ 20%）、预计重置前耗尽、消耗突然加速三类本地通知，可独立开关。
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
+- **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动「检查更新」；发现新版本后自动匹配当前芯片下载 DMG 并打开，拖入「应用程序」即可完成升级。
+- **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
 - **开机启动**：面板一键开关，通过 LaunchAgent 实现，不产生 Dock 图标。
@@ -63,6 +69,26 @@ Q 1,770   W 12,480   C 8.5%
 
 卡片底部会出现一条趋势行：左侧是近 7 天剩余比例曲线，右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
 
+趋势行上方会显示「今日消耗 · 近 7 日日均」；日均至少需要 6 小时历史样本，数据不足时显示 `--`。
+
+面板最底部：
+
+| 元素 | 说明 |
+| --- | --- |
+| `v1.4.0` | 当前安装版本 |
+| `GitHub` | 打开项目源码仓库 |
+| `MIT` | 打开 MIT 许可证 |
+| `检查更新` / `已是最新` / `重试检查` | 手动检查 GitHub Releases；失败时悬停可查看原因 |
+
+### 版本与更新
+
+- 应用启动后及面板打开时会检查更新，自动检查最多每 24 小时一次；底部按钮可随时手动检查。
+- 优先请求 GitHub Releases API；若 API 被限流或不可用，会自动回退到发布页，不要求登录或 Token。
+- 发现新版本时，面板顶部显示「新版本 x.y.z 可用」，并下载与当前芯片匹配的安装包：arm64 选 `-arm64.dmg`，Intel 选 `-x86_64.dmg`，找不到时使用通用 DMG。
+- 下载完成后自动打开 DMG，将 **TokenTool** 拖入「应用程序」覆盖旧版本即可；应用不会静默替换自身，避免 ad-hoc 签名应用的权限与 Gatekeeper 问题。
+- 更新检查遵循系统代理设置；若使用代理访问 GitHub，请确认「系统设置 → 网络 → 代理」已配置。
+- 更新检查只读取版本号与安装包地址，不上传任何账号、额度或使用数据。
+
 ## 环境要求
 
 | 项目 | 要求 |
@@ -82,9 +108,9 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.3.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.3.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.3.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.0/TokenTool-1.4.0.zip) |
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -140,6 +166,7 @@ open /Applications/TokenTool.app
 
 - 应用不会打印或保存 token、refresh token、密码、邮箱、UIN 等敏感信息。
 - 提醒由 macOS 本地通知调度，不经过任何服务器。
+- 版本检查仅访问 GitHub 的公开 Releases 页面 / API，不携带账号凭据或用量数据；安装包从 GitHub Releases 下载。
 - 缓存与历史仅包含套餐、额度、百分比、时间戳等展示数据，路径为：
   ```
   ~/Library/Application Support/TokenTool/cache.json
@@ -162,6 +189,9 @@ open /Applications/TokenTool.app
 | 菜单栏找不到应用 | 确认未全部隐藏（全部隐藏时显示 `AI`）；或重新启动应用 |
 | 开机启动无效 | 检查 `~/Library/LaunchAgents/com.local.tokentool.plist` 是否存在，并在面板重新开关一次 |
 | 没有收到提醒 | 在「系统设置 → 通知」中允许 TokenTool / AI 用量 的通知权限；面板出现提示时点击「去开启」 |
+| 检查更新失败 | 确认网络或系统代理可访问 GitHub；应用在 API 限流时会自动回退发布页，稍后点「重试检查」即可 |
+| 更新下载后如何安装 | 应用会自动打开对应芯片的 DMG，将 TokenTool 拖入「应用程序」覆盖旧版本，再重新启动 |
+| 已是最新但 Release 有更新 | 点击底部「已是最新」重新检查；若仍不生效，确认版本号大于当前安装版本 |
 
 ## 卸载
 
@@ -180,15 +210,27 @@ defaults delete com.local.tokentool 2>/dev/null
 .
 ├── TokenToolApp.swift   # NSStatusItem + NSPopover 入口，无 Dock 图标
 ├── Views.swift          # 菜单栏标签、详情面板、数据状态、通知与刷新调度
-├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测
+├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测、用量洞察
+├── Update.swift         # GitHub Releases 版本检查、安装包匹配与下载
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
 ├── AppIcon.icns         # 应用图标
+├── LICENSE              # MIT 开源许可证
 ├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
 ├── build.sh             # arm64 / x86_64 / 通用版本构建与 ad-hoc 签名
 └── README.md
 ```
 
 ## 版本记录
+
+### 1.4.0
+
+- 新增自适应详情面板：按屏幕可用高度调整，小屏自动滚动，底部设置不再被裁切。
+- 新增用量洞察：展示今日消耗与近 7 日日均，领取或重置带来的增加不计入消耗。
+- 新增版本检查与升级：每 24 小时自动检查 GitHub Releases，也可手动检查；自动匹配 arm64 / x86_64 / 通用安装包并打开 DMG。
+- GitHub API 限流或不可用时自动回退到发布页，更新检查无需登录或 Token。
+- 面板底部新增当前版本、GitHub 源码与 MIT 许可证入口。
+- 项目以 MIT License 开源，补充版本与开源信息。
+- arm64、x86_64 与通用包同步更新。
 
 ### 1.3.1
 
@@ -227,6 +269,19 @@ defaults delete com.local.tokentool 2>/dev/null
 ### 1.0.0
 
 - 首个版本：菜单栏展示三家额度，详情面板、自动刷新、开机启动、本地缓存。
+
+## 开源许可
+
+本项目采用 [MIT License](LICENSE) 开源。
+
+| 项目 | 地址 |
+| --- | --- |
+| 源码仓库 | <https://github.com/pumf/token_tool> |
+| 问题反馈 | <https://github.com/pumf/token_tool/issues> |
+| 版本发布 | <https://github.com/pumf/token_tool/releases> |
+| 当前版本 | 1.4.0（build 6） |
+
+欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
 ## 免责声明
 

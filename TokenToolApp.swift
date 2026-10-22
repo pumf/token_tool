@@ -15,6 +15,7 @@ struct TokenToolApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: UsageStore?
+    private var updates: UpdateChecker?
     private var menuBar: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -23,8 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         center.delegate = self
         configureNotificationCategories(center)
         let store = UsageStore()
+        let updates = UpdateChecker()
         self.store = store
-        self.menuBar = MenuBarController(store: store)
+        self.updates = updates
+        self.menuBar = MenuBarController(store: store, updates: updates)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            updates.checkIfNeeded()
+        }
     }
 
     private func configureNotificationCategories(_ center: UNUserNotificationCenter) {
@@ -90,18 +96,22 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 @MainActor
 final class MenuBarController: NSObject, NSPopoverDelegate {
     private let store: UsageStore
+    private let updates: UpdateChecker
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
-    private let hostingView: NSHostingView<MenuContent>
+    private let hostingView: NSHostingView<MenuPanel>
     private var cancellables = Set<AnyCancellable>()
     private var lastCloseAt = Date.distantPast
+    private var appliedMaxHeight: CGFloat = 0
 
-    init(store: UsageStore) {
+    init(store: UsageStore, updates: UpdateChecker) {
         self.store = store
-        self.hostingView = NSHostingView(rootView: MenuContent(store: store))
+        self.updates = updates
+        self.hostingView = NSHostingView(
+            rootView: MenuPanel(store: store, updates: updates, maxHeight: 700)
+        )
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
-
         hostingView.frame = NSRect(x: 0, y: 0, width: 382, height: 1)
         let controller = NSViewController()
         controller.view = hostingView
@@ -126,6 +136,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if self.applyMaxHeightIfNeeded() {
+                        self.updateContentSize()
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        applyMaxHeightIfNeeded()
         updateTitle()
         updateContentSize()
     }
@@ -137,6 +160,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         guard Date().timeIntervalSince(lastCloseAt) > 0.2 else { return }
         guard let button = statusItem.button else { return }
+        applyMaxHeightIfNeeded()
         updateTitle()
         updateContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -159,19 +183,35 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         button.toolTip = store.menuBarTooltip
     }
 
+    private var maxPanelHeight: CGFloat {
+        let screen = statusItem.button?.window?.screen ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return 700 }
+        return max(240, visible.height - 36)
+    }
+
+    @discardableResult
+    private func applyMaxHeightIfNeeded() -> Bool {
+        let height = maxPanelHeight
+        guard abs(height - appliedMaxHeight) > 0.5 else { return false }
+        appliedMaxHeight = height
+        hostingView.rootView = MenuPanel(store: store, updates: updates, maxHeight: height)
+        return true
+    }
+
     private func updateContentSize() {
         hostingView.layoutSubtreeIfNeeded()
         let fitting = hostingView.fittingSize
+        let height = min(ceil(fitting.height), appliedMaxHeight)
         popover.contentSize = NSSize(
             width: max(382, ceil(fitting.width)),
-            height: max(1, ceil(fitting.height))
+            height: max(1, height)
         )
     }
 
     private func resizeIfNeeded() {
         guard popover.isShown else { return }
         hostingView.layoutSubtreeIfNeeded()
-        let height = max(1, ceil(hostingView.fittingSize.height))
+        let height = max(1, min(ceil(hostingView.fittingSize.height), appliedMaxHeight))
         guard abs(popover.contentSize.height - height) > 0.5 else { return }
         popover.contentSize = NSSize(width: popover.contentSize.width, height: height)
     }

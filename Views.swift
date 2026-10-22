@@ -537,6 +537,15 @@ final class UsageStore: ObservableObject {
         )
     }
 
+    func insight(for provider: UsageProvider) -> UsageInsight? {
+        guard let result = currentResult(for: provider), result.ok == true else { return nil }
+        return UsageAnalytics.insight(
+            provider: provider,
+            input: usageInput(result),
+            samples: history(for: provider)
+        )
+    }
+
     private func currentResult(for provider: UsageProvider) -> ProviderResult? {
         switch provider {
         case .qoder: return qoder
@@ -1171,10 +1180,12 @@ extension UsageStore {
 
 struct MenuContent: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var updates: UpdateChecker
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             header
+            updateBanner
             qoderCard
             workbuddyCard
             codexCard
@@ -1182,12 +1193,15 @@ struct MenuContent: View {
             reminderSettings
             alertSettings
             Divider()
+            aboutRow
             footer
         }
         .padding(14)
         .frame(width: 382)
-        .background(.regularMaterial)
-        .onAppear { store.refreshNotificationStatus() }
+        .onAppear {
+            store.refreshNotificationStatus()
+            updates.checkIfNeeded()
+        }
     }
 
     private var header: some View {
@@ -1217,6 +1231,60 @@ struct MenuContent: View {
                 .controlSize(.small)
             }
         }
+    }
+
+    @ViewBuilder
+    private var updateBanner: some View {
+        if let release = updates.pendingRelease {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.qoder)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("新版本 \(release.version) 可用")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(updateSubtitle)
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Button(updates.primaryActionTitle) {
+                    updates.performPrimaryAction()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .font(.system(size: 9, weight: .medium))
+                .disabled(!updates.canPerformPrimaryAction)
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Theme.qoder.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Theme.qoder.opacity(0.20), lineWidth: 0.5)
+            )
+            .help(releaseHelp(release))
+        }
+    }
+
+    private var updateSubtitle: String {
+        switch updates.state {
+        case .downloading:
+            return "正在下载安装包…"
+        case .ready:
+            return "安装包已打开，拖入「应用程序」完成升级"
+        default:
+            return "当前 v\(updates.currentVersion)，可下载对应芯片安装包"
+        }
+    }
+
+    private func releaseHelp(_ release: UpdateRelease) -> String {
+        let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !notes.isEmpty else { return "当前 v\(updates.currentVersion)" }
+        return String(notes.prefix(500))
     }
 
     private var qoderCard: some View {
@@ -1265,6 +1333,7 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                insightRow(.qoder)
                 forecastRow(.qoder, tint: Theme.qoder)
             } else {
                 emptyContent
@@ -1297,6 +1366,7 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                insightRow(.workbuddy)
                 forecastRow(.workbuddy, tint: Theme.workbuddy)
             } else if store.workbuddy != nil {
                 Text("暂无可用的 Credits 资源包")
@@ -1350,6 +1420,7 @@ struct MenuContent: View {
                 }
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
+                insightRow(.codex)
                 forecastRow(.codex, tint: Theme.codex)
             } else {
                 emptyContent
@@ -1371,6 +1442,41 @@ struct MenuContent: View {
             }
             .help(forecast.help)
         }
+    }
+
+    @ViewBuilder
+    private func insightRow(_ provider: UsageProvider) -> some View {
+        if let insight = store.insight(for: provider) {
+            HStack(spacing: 5) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 8, weight: .semibold))
+                Text(insightText(insight))
+                    .font(.system(size: 9))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .help("按本机历史采样估算，领取或重置带来的增加不计入消耗；日均需至少 6 小时样本，已观察 \(insight.observedDays) 天。")
+        }
+    }
+
+    private func insightText(_ insight: UsageInsight) -> String {
+        let today = insight.todayConsumed.map {
+            "今日消耗 \(insightValue($0, percent: insight.isPercent))"
+        } ?? "今日消耗 --"
+        let average = insight.dailyAverage.map {
+            "近7日日均 \(insightValue($0, percent: insight.isPercent))/天"
+        } ?? "近7日日均 --"
+        return "\(today) · \(average)"
+    }
+
+    private func insightValue(_ value: Double, percent: Bool) -> String {
+        if percent {
+            return value > 0 && value < 10
+                ? String(format: "%.1f%%", value)
+                : Format.percent(value)
+        }
+        return "\(Format.credits(value)) Credits"
     }
 
     private var emptyContent: some View {
@@ -1628,6 +1734,80 @@ struct MenuContent: View {
         .help("\(help)（\(isOn.wrappedValue ? "已开启" : "已关闭")）")
     }
 
+    private var aboutRow: some View {
+        HStack(spacing: 5) {
+            Text("v\(updates.currentVersion)")
+                .foregroundStyle(.secondary)
+            Text("·")
+                .foregroundStyle(.quaternary)
+            Button("GitHub") {
+                Apps.openURL("https://github.com/pumf/token_tool")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("打开项目源码")
+            Text("·")
+                .foregroundStyle(.quaternary)
+            Button("MIT") {
+                if let license = Bundle.main.url(forResource: "LICENSE", withExtension: "txt") {
+                    NSWorkspace.shared.open(license)
+                } else {
+                    Apps.openURL("https://opensource.org/license/mit")
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("查看随应用附带的 MIT 许可证")
+            Spacer(minLength: 4)
+            updateControl
+        }
+        .font(.system(size: 9))
+    }
+
+    @ViewBuilder
+    private var updateControl: some View {
+        switch updates.state {
+        case .checking:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("检查中")
+            }
+            .foregroundStyle(.secondary)
+        case .downloading:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("下载中")
+            }
+            .foregroundStyle(.secondary)
+        case .ready:
+            Text("安装包已就绪")
+                .foregroundStyle(.secondary)
+        case .upToDate:
+            Button("已是最新") {
+                updates.check()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("重新检查 GitHub Releases")
+        case .failed(let message):
+            Button("重试检查") {
+                updates.check()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.warning)
+            .help(message)
+        case .idle, .available:
+            Button("检查更新") {
+                updates.check()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("从 GitHub Releases 检查新版本")
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: 10) {
             Toggle(
@@ -1649,6 +1829,21 @@ struct MenuContent: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct MenuPanel: View {
+    @ObservedObject var store: UsageStore
+    @ObservedObject var updates: UpdateChecker
+    let maxHeight: CGFloat
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            MenuContent(store: store, updates: updates)
+        }
+        .frame(width: 382)
+        .frame(maxHeight: maxHeight)
+        .background(.regularMaterial)
     }
 }
 
