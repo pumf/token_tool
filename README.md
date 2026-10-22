@@ -17,7 +17,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
 - **开机启动**：面板一键开关，通过 LaunchAgent 实现，不产生 Dock 图标。
-- **原生安装包**：分别提供 Apple Silicon（arm64）与 Intel（x86_64）安装包，另附通用二进制，最低 macOS 13。
+- **原生安装包**：分别提供 Apple Silicon（arm64）与 Intel（x86_64）安装包，另附通用二进制，最低 macOS 12。
 - **应用图标**：三色环形仪表盘图标，安装后可在访达、启动台与 DMG 中识别。
 
 ## 界面说明
@@ -67,7 +67,7 @@ Q 1,770   W 12,480   C 8.5%
 
 | 项目 | 要求 |
 | --- | --- |
-| 系统 | macOS 13 Ventura 及以上 |
+| 系统 | macOS 12 Monterey 及以上 |
 | 架构 | Apple Silicon（arm64）或 Intel（x86_64），提供独立安装包与通用版本 |
 | Python | Python 3（系统 Command Line Tools 自带即可） |
 | Qoder | 已安装官方 CLI `qoderclicn` 并完成登录 |
@@ -82,9 +82,9 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.3.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.3.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.3.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.0/TokenTool-1.3.0.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.3.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.3.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.3.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.3.1/TokenTool-1.3.1.zip) |
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -178,7 +178,7 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ```
 .
-├── TokenToolApp.swift   # MenuBarExtra 入口，无 Dock 图标
+├── TokenToolApp.swift   # NSStatusItem + NSPopover 入口，无 Dock 图标
 ├── Views.swift          # 菜单栏标签、详情面板、数据状态、通知与刷新调度
 ├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
@@ -189,6 +189,12 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.3.1
+
+- 最低系统要求从 macOS 13 降至 macOS 12 Monterey。
+- 菜单栏入口由 SwiftUI `MenuBarExtra` 改为 AppKit `NSStatusItem + NSPopover`，功能与面板内容不变。
+- arm64、x86_64 与通用包同步更新。
 
 ### 1.3.0
 

@@ -1120,61 +1120,52 @@ struct ProviderCard<Content: View>: View {
     }
 }
 
-struct MenuBarLabel: View {
-    @ObservedObject var store: UsageStore
-
-    var body: some View {
-        Text(labelText)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .help(tooltip)
-    }
-
-    private var labelText: String {
+extension UsageStore {
+    var menuBarText: String {
         var parts: [String] = []
-        if store.showQoderInMenuBar { parts.append("Q \(qoderText)") }
-        if store.showWorkBuddyInMenuBar { parts.append("W \(workbuddyText)") }
-        if store.showCodexInMenuBar { parts.append("C \(codexText)") }
+        if showQoderInMenuBar { parts.append("Q \(qoderText)") }
+        if showWorkBuddyInMenuBar { parts.append("W \(workbuddyText)") }
+        if showCodexInMenuBar { parts.append("C \(codexText)") }
         return parts.isEmpty ? "AI" : parts.joined(separator: "   ")
     }
 
+    var menuBarTooltip: String {
+        var parts: [String] = []
+        if let qoder, qoder.ok == true {
+            parts.append("Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits")
+        } else {
+            parts.append("Qoder 不可用")
+        }
+        if let workbuddy, workbuddy.ok == true {
+            parts.append("WorkBuddy 剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(workbuddy.total)) credits")
+        } else {
+            parts.append("WorkBuddy 不可用")
+        }
+        if let codex, codex.ok == true, let window = codex.primaryWindow {
+            parts.append("Codex \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))")
+        } else {
+            parts.append("Codex 不可用")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private var qoderText: String {
-        guard let qoder = store.qoder, qoder.ok == true, let remaining = qoder.remaining, (qoder.total ?? 0) > 0 else {
+        guard let qoder, qoder.ok == true, let remaining = qoder.remaining, (qoder.total ?? 0) > 0 else {
             return "--"
         }
         return Format.credits(remaining)
     }
 
     private var workbuddyText: String {
-        guard let workbuddy = store.workbuddy, workbuddy.ok == true, let remaining = workbuddy.remaining else {
+        guard let workbuddy, workbuddy.ok == true, let remaining = workbuddy.remaining else {
             return "--"
         }
         return Format.credits(remaining)
     }
 
     private var codexText: String {
-        guard let codex = store.codex, codex.ok == true, let window = codex.primaryWindow else { return "--" }
+        guard let codex, codex.ok == true, let window = codex.primaryWindow else { return "--" }
         return Format.percent(window.remainingPercent)
-    }
-
-    private var tooltip: String {
-        var parts: [String] = []
-        if let qoder = store.qoder, qoder.ok == true {
-            parts.append("Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits")
-        } else {
-            parts.append("Qoder 不可用")
-        }
-        if let workbuddy = store.workbuddy, workbuddy.ok == true {
-            parts.append("WorkBuddy 剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(workbuddy.total)) credits")
-        } else {
-            parts.append("WorkBuddy 不可用")
-        }
-        if let codex = store.codex, codex.ok == true, let window = codex.primaryWindow {
-            parts.append("Codex \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))")
-        } else {
-            parts.append("Codex 不可用")
-        }
-        return parts.joined(separator: " · ")
     }
 }
 

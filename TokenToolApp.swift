@@ -1,28 +1,30 @@
 import SwiftUI
 import AppKit
-import UserNotifications
+import Combine
+@preconcurrency import UserNotifications
 
 @main
 struct TokenToolApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = UsageStore()
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuContent(store: store)
-        } label: {
-            MenuBarLabel(store: store)
-        }
-        .menuBarExtraStyle(.window)
+        Settings { EmptyView() }
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var store: UsageStore?
+    private var menuBar: MenuBarController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         configureNotificationCategories(center)
+        let store = UsageStore()
+        self.store = store
+        self.menuBar = MenuBarController(store: store)
     }
 
     private func configureNotificationCategories(_ center: UNUserNotificationCenter) {
@@ -52,8 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         center.setNotificationCategories([qoder, workbuddy, codex])
     }
+}
 
-    func userNotificationCenter(
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -61,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .sound])
     }
 
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
@@ -80,5 +84,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         completionHandler()
+    }
+}
+
+@MainActor
+final class MenuBarController: NSObject, NSPopoverDelegate {
+    private let store: UsageStore
+    private let statusItem: NSStatusItem
+    private let popover = NSPopover()
+    private let hostingView: NSHostingView<MenuContent>
+    private var cancellables = Set<AnyCancellable>()
+    private var lastCloseAt = Date.distantPast
+
+    init(store: UsageStore) {
+        self.store = store
+        self.hostingView = NSHostingView(rootView: MenuContent(store: store))
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        super.init()
+
+        hostingView.frame = NSRect(x: 0, y: 0, width: 382, height: 1)
+        let controller = NSViewController()
+        controller.view = hostingView
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        popover.animates = true
+        popover.delegate = self
+
+        if let button = statusItem.button {
+            button.target = self
+            button.action = #selector(togglePopover(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+
+        store.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.updateTitle()
+                    self?.resizeIfNeeded()
+                }
+            }
+            .store(in: &cancellables)
+
+        updateTitle()
+        updateContentSize()
+    }
+
+    @objc private func togglePopover(_ sender: Any?) {
+        if popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+        guard Date().timeIntervalSince(lastCloseAt) > 0.2 else { return }
+        guard let button = statusItem.button else { return }
+        updateTitle()
+        updateContentSize()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        lastCloseAt = Date()
+    }
+
+    private func updateTitle() {
+        guard let button = statusItem.button else { return }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        button.attributedTitle = NSAttributedString(
+            string: store.menuBarText,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.labelColor,
+            ]
+        )
+        button.toolTip = store.menuBarTooltip
+    }
+
+    private func updateContentSize() {
+        hostingView.layoutSubtreeIfNeeded()
+        let fitting = hostingView.fittingSize
+        popover.contentSize = NSSize(
+            width: max(382, ceil(fitting.width)),
+            height: max(1, ceil(fitting.height))
+        )
+    }
+
+    private func resizeIfNeeded() {
+        guard popover.isShown else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let height = max(1, ceil(hostingView.fittingSize.height))
+        guard abs(popover.contentSize.height - height) > 0.5 else { return }
+        popover.contentSize = NSSize(width: popover.contentSize.width, height: height)
     }
 }

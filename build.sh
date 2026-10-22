@@ -13,7 +13,7 @@ rm -rf "$UNIVERSAL_APP" "$ARM_APP" "$INTEL_APP" \
 
 for arch in arm64 x86_64; do
     swiftc -O -parse-as-library \
-        -target "${arch}-apple-macos13.0" \
+        -target "${arch}-apple-macos12.0" \
         -framework SwiftUI -framework AppKit -framework Combine -framework UserNotifications \
         Analytics.swift Views.swift TokenToolApp.swift \
         -o "$BUILD/TokenTool-${arch}"
