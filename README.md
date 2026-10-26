@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.1**（build 7） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.2**（build 8） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -76,7 +76,7 @@ Q 1,770   W 12,480   C 8.5%
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.1` | 当前安装版本 |
+| `v1.4.2` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -98,7 +98,7 @@ Q 1,770   W 12,480   C 8.5%
 | 系统 | macOS 12 Monterey 及以上 |
 | 架构 | Apple Silicon（arm64）或 Intel（x86_64），提供独立安装包与通用版本 |
 | Python | Python 3（系统 Command Line Tools 自带即可） |
-| Qoder | 已安装官方 CLI `qoderclicn` 并完成登录 |
+| Qoder | 已单独安装官方 CLI `qoderclicn` 并完成登录（Qoder 客户端本身不含该 CLI） |
 | WorkBuddy | 客户端已安装、已登录并保持运行 |
 | Codex | ChatGPT.app 已安装并登录（内置 codex CLI） |
 
@@ -110,9 +110,9 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.1/TokenTool-1.4.1.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.2-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.2-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.2.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2.zip) |
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -183,6 +183,7 @@ open /Applications/TokenTool.app
 | 现象 | 处理 |
 | --- | --- |
 | Qoder 提示「未登录」 | 点击卡片上的「终端登录」，或执行 `~/.local/bin/qoderclicn login` |
+| Qoder 提示「未安装」但已装 Qoder 客户端 | 额度读取依赖独立的官方 CLI，Qoder 客户端本身不含它；点击「安装 CLI」或执行安装命令后刷新 |
 | Qoder 提示「未安装」 | 点击「安装 CLI」查看官方文档，或执行 `curl -fsSL https://static.qoder.com.cn/qoder-cli-cn/install.sh \| bash` |
 | Qoder 读取超时 | 确认 CLI 可在终端正常打开 `/usage`；首次运行需信任工作目录 |
 | WorkBuddy 未运行 / 授权失效 | 打开 WorkBuddy 并重新登录，保持客户端运行后刷新 |
@@ -223,6 +224,12 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.4.2
+
+- Qoder CLI 查找范围扩大：除 `~/.local/bin` 与 `~/.qoder-cn/bin` 外，额外搜索 `/usr/local/bin`、`/opt/homebrew/bin`，并补全 GUI 启动时缺失的 PATH，避免已安装 CLI 仍被判定为未安装。
+- 已安装 Qoder 客户端但未安装官方 CLI 时，提示明确区分两者（客户端本身不含额度接口），「安装 CLI」按钮保持不变。
+- CLI 文件存在但不可执行时，提示中给出具体路径便于排查权限问题。
 
 ### 1.4.1
 
@@ -292,7 +299,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.1（build 7） |
+| 当前版本 | 1.4.2（build 8） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

@@ -397,15 +397,29 @@ def collect_workbuddy() -> dict:
 
 # ---------------------------------------------------------------- Qoder
 
-def qoder_cli():
-    candidates = [
+def qoder_cli_paths():
+    return [
         HOME / ".local" / "bin" / "qoderclicn",
         HOME / ".qoder-cn" / "bin" / "qoderclicn" / "qoderclicn",
+        Path("/usr/local/bin/qoderclicn"),
+        Path("/opt/homebrew/bin/qoderclicn"),
     ]
-    for path in candidates:
+
+
+def qoder_cli_search_path():
+    # A GUI-launched app inherits a minimal PATH, so add the usual install dirs.
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    parts += [str(parent) for parent in {p.parent for p in qoder_cli_paths()}]
+    seen = set()
+    ordered = [p for p in parts if p and not (p in seen or seen.add(p))]
+    return os.pathsep.join(ordered)
+
+
+def qoder_cli():
+    for path in qoder_cli_paths():
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
-    found = shutil.which("qoderclicn")
+    found = shutil.which("qoderclicn", path=qoder_cli_search_path())
     if found:
         return found
     version_dir = HOME / ".qoder-cn" / "bin" / "qoderclicn"
@@ -414,6 +428,16 @@ def qoder_cli():
             if path.is_file() and os.access(path, os.X_OK):
                 return str(path)
     return None
+
+
+def qoder_cli_missing_message():
+    blocked = [p for p in qoder_cli_paths() if p.exists() and not os.access(p, os.X_OK)]
+    if blocked:
+        return "未安装可用的 Qoder CLI；权限异常：" + str(blocked[0])
+    install = "安装：curl -fsSL https://static.qoder.com.cn/qoder-cli-cn/install.sh | bash"
+    if (Path("/Applications/Qoder CN.app") / "Contents" / "Info.plist").exists():
+        return "未安装 Qoder CLI（已检测到 Qoder 客户端，但额度需官方 CLI 读取）；" + install
+    return "未安装 Qoder CLI；" + install
 
 
 def qoder_env():
@@ -494,7 +518,7 @@ def parse_qoder(text):
 def collect_qoder() -> dict:
     cli = qoder_cli()
     if not cli:
-        return fail("未安装 Qoder CLI；安装：curl -fsSL https://static.qoder.com.cn/qoder-cli-cn/install.sh | bash")
+        return fail(qoder_cli_missing_message())
     workdir = APP_SUPPORT / "qoder-cwd"
     try:
         workdir.mkdir(parents=True, exist_ok=True)
