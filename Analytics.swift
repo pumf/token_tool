@@ -95,6 +95,8 @@ enum UsageAnalytics {
     static let minimumInsightSpan: TimeInterval = 6 * 3600
     /// 每小时百分点低于该值视为「无明显消耗」（约 0.5%/天）。
     static let minimumForecastRate = 0.02
+    /// 达到这个时长的窗口按日均口径估算，而不是近 1 小时速率。
+    static let minutesPerDay = 1440
 
     private static let jumpThreshold = 0.75
     private static let day: TimeInterval = 86400
@@ -443,7 +445,9 @@ enum UsageAnalytics {
             let netDaily = netDailyPercent(points.filter { $0.at >= chartStart })
             let dailyPerHour = (netDaily?.daily ?? 0) / 24
             if hourly != nil || netDaily != nil { sawRate = true }
-            let ratePerHour = max(hourly ?? 0, dailyPerHour)
+            // 天级以上的窗口只认日均：把近 1 小时的一次扣减外推到整月会把剩余时间算得极短。
+            let usesDailyBasis = window.minutes >= minutesPerDay && (netDaily?.daily ?? 0) > 0
+            let ratePerHour = usesDailyBasis ? dailyPerHour : max(hourly ?? 0, dailyPerHour)
             if ratePerHour <= minimumForecastRate {
                 sawZeroRate = true
                 continue
@@ -453,7 +457,8 @@ enum UsageAnalytics {
                 hourly: hourly,
                 netDaily: netDaily,
                 dailyPerHour: dailyPerHour,
-                ratePerHour: ratePerHour
+                ratePerHour: ratePerHour,
+                usesDailyBasis: usesDailyBasis
             )
             let hours = window.remainingPercent / ratePerHour
             projections.append(WindowProjection(
@@ -496,7 +501,7 @@ enum UsageAnalytics {
             let hours = max(0, primaryProjection.exhaustAt.timeIntervalSince(now) / 3600)
             if let reset = primaryProjection.resetsAt {
                 let remaining = primaryProjection.remainingPercent
-                let resetText = "预计 \(timeText(primaryProjection.exhaustAt)) 耗尽，重置时间 \(timeText(reset))，" + basisText(primary.minutes, primaryProjection.ratePerHour) + "。"
+                let resetText = "按\(basisText(primary.minutes, primaryProjection.ratePerHour))，窗口剩余 \(rateText(remaining))% 可撑到 \(timeText(reset)) 的重置。"
                 return UsageForecast(
                     values: values,
                     text: "可撑到重置（\(windowText(primary.minutes))）",
@@ -567,8 +572,12 @@ enum UsageAnalytics {
         hourly: Double?,
         netDaily: (daily: Double, days: Int)?,
         dailyPerHour: Double,
-        ratePerHour: Double
+        ratePerHour: Double,
+        usesDailyBasis: Bool
     ) -> String {
+        if usesDailyBasis, let netDaily {
+            return "近 \(netDaily.days) 天净消耗 \(rateText(netDaily.daily))%/天"
+        }
         let recent = hourly ?? 0
         if recent >= dailyPerHour, recent > 0 {
             if let netDaily, netDaily.daily > 0 {

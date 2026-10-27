@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.5**（build 11） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.6**（build 12） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -17,7 +17,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder CLI 未安装时「安装 CLI」一键下载官方安装包并在装好后自动发起登录，未登录时「登录」直接在浏览器完成授权，无需打开终端。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
 - **三层可见提醒**：额度告急与「今日待领取」不只发系统通知——菜单栏文字会变色加图标（告警红色 `⚠`、待领取橙色 `＋`），新提醒出现后闪动 60 秒（打开面板即停），面板顶部还有一条关注摘要列出原因、预计耗尽时刻与「打开客户端」。系统通知被关闭、勿扰模式或通知已划走都不再漏看。
-- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本）；Codex 取「近 7 天净消耗折算时速」与「近 1 小时速率」中较高者，判断能否撑到窗口重置，两者都接近 0 才提示「近期无明显消耗」。
+- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本）；Codex 按窗口长度选口径：周、月度这类天级以上的窗口只用近 7 天净日均，5 小时这类短窗口才用近 1 小时速率，然后与窗口重置时间比较，给出「可撑到重置」或预计耗尽时刻。
 - **智能预警**：低额度阈值可选 10% / 20% / 30%（默认 20%，持久保存），另有预计重置前耗尽、消耗突然加速两类本地通知，均可独立开关。
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
 - **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动检查；发现新版本后自动匹配当前芯片下载 DMG，下载完成时按 Release 的 `SHA256SUMS` 资产（或说明中的「校验」表）比对 SHA-256，通过后自动打开 DMG，拖入「应用程序」即可完成升级。手动检查后会在面板顶部给出结果提示与上次检查时间，取不到校验值时明确标注「SHA-256 未校验」。
@@ -80,12 +80,12 @@ Q 1,770   W 12,480   C 8.5%
 | 按钮 | 行为 |
 | --- | --- |
 | `低额度` | 任一平台剩余比例降至阈值及以下时提醒（阈值可选 10% / 20% / 30%，默认 20%），恢复至阈值 +5% 以上后重新布防 |
-| `重置前耗尽` | Codex 按预测速度（近 7 天净消耗与近 1 小时速率取较高者）预计会在限额窗口重置前用完时提醒 |
+| `重置前耗尽` | Codex 按预测速度（天级以上窗口用近 7 天净日均，短窗口用近 1 小时速率）预计会在限额窗口重置前用完时提醒 |
 | `消耗加速` | 近 15 分钟消耗速度达到此前 1 小时的 2.5 倍以上时提醒 |
 
 预警均为本机通知，并带冷却时间去重，避免短时间内重复弹出。低额度与重置前耗尽两类告警同时驱动菜单栏高亮与面板顶部的关注摘要，即使系统通知未授权或被划走也仍然看得见；「消耗加速」属于瞬时状态，只发通知。Qoder / WorkBuddy 的耗尽预测与「净日均消耗」同口径：剔除每日领取、重置与套餐总量变化的影响，领取覆盖消耗时提示「按当前节奏不会耗尽」，样本不足时先显示「样本积累中」，仅供提前预警参考。
 
-Codex 的预测速度取「近 7 天净消耗折算时速」与「近 1 小时速率」中的较高者：前者保证隔几天集中用一次也能给出结论（不再因为最近一小时没动就显示「近期无明显消耗」），后者保证正在突发使用时不被 7 天均值摊平而低估风险；结论会与窗口重置时间比较，撑得到重置显示「可撑到重置（月度）」，撑不到则给出预计耗尽时刻并触发预警。悬停可见两条速度分别是多少。
+Codex 的预测速度按窗口长度选择口径。周、月度这类天级以上的窗口只用「近 7 天净消耗折算时速」：一次 5 分钟的扣减若被近 1 小时回归放大成时速再外推到整月，会得出「日均 1.7%/天、剩余 77%，却只剩 3.5 天」这类自相矛盾的结论，长窗口按日均才与面板上的「近7日日均」一致。5 小时这类短窗口仍取「近 1 小时速率」与日均的较高者，保证突发使用时不被 7 天均值摊平而低估风险；历史不足 6 小时算不出日均时，退回近 1 小时速率。结论与窗口重置时间比较：撑得到重置显示「可撑到重置（月度）」，撑不到则给出预计耗尽时刻并触发预警；两者都接近 0（约低于 0.5%/天）才提示「近期无明显消耗」。悬停可见实际采用的口径与数值。
 
 卡片底部会出现一条趋势行：左侧是近 7 天剩余曲线（Qoder / WorkBuddy 为剩余 Credits，Codex 为剩余比例），右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
 
@@ -95,7 +95,7 @@ Codex 的预测速度取「近 7 天净消耗折算时速」与「近 1 小时�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.5` | 当前安装版本 |
+| `v1.4.6` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -131,11 +131,11 @@ Codex 的预测速度取「近 7 天净消耗折算时速」与「近 1 小时�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.5-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.5-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.5.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.5/TokenTool-1.4.5.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.6-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.6-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.6.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.6/TokenTool-1.4.6.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.5/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.6/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -257,6 +257,12 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.4.6
+
+- 修正 Codex 月度、周这类天级以上窗口的耗尽预测：不再把「近 1 小时速率」外推到整月。此前一次 5 分钟的扣减经线性回归放大成时速后，会出现「近7日日均 1.7%/天、剩余 77%，却提示只剩 3.5 天」的自相矛盾结论；长窗口现在一律按近 7 天净日均估算，与面板上的日均口径一致。
+- 5 小时这类短窗口保持按小时速率预警；只有历史不足 6 小时算不出日均时才退回近 1 小时速率，悬停文案会写明本次采用的是哪条口径。
+- 「可撑到重置」的悬停文案改为给出日均口径与重置时刻，不再列出一个晚于重置的耗尽时间。
+
 ### 1.4.5
 
 - 提醒不再只依赖系统通知，改为三层同时可见：菜单栏文字着色加 `⚠` / `＋` 前缀、新提醒闪动 60 秒（打开面板即停）、面板顶部的「关注摘要」列出平台、原因与时刻并可一键打开客户端。
@@ -354,7 +360,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.5（build 11） |
+| 当前版本 | 1.4.6（build 12） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
