@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.3**（build 9） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.4**（build 10） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -16,7 +16,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **用量洞察**：按本机历史采样估算今日消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder CLI 未安装时「安装 CLI」一键下载官方安装包并在装好后自动发起登录，未登录时「登录」直接在浏览器完成授权，无需打开终端。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
-- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本），Codex 按窗口内消耗速度判断能否撑到重置。
+- **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本）；Codex 取「近 7 天净消耗折算时速」与「近 1 小时速率」中较高者，判断能否撑到窗口重置，两者都接近 0 才提示「近期无明显消耗」。
 - **智能预警**：低额度阈值可选 10% / 20% / 30%（默认 20%，持久保存），另有预计重置前耗尽、消耗突然加速两类本地通知，均可独立开关。
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
 - **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动检查；发现新版本后自动匹配当前芯片下载 DMG，下载完成时按 Release 的 `SHA256SUMS` 资产（或说明中的「校验」表）比对 SHA-256，通过后自动打开 DMG，拖入「应用程序」即可完成升级。手动检查后会在面板顶部给出结果提示与上次检查时间，取不到校验值时明确标注「SHA-256 未校验」。
@@ -66,10 +66,12 @@ Q 1,770   W 12,480   C 8.5%
 | 按钮 | 行为 |
 | --- | --- |
 | `低额度` | 任一平台剩余比例降至阈值及以下时提醒（阈值可选 10% / 20% / 30%，默认 20%），恢复至阈值 +5% 以上后重新布防 |
-| `重置前耗尽` | Codex 按近期速度预计会在限额窗口重置前用完时提醒 |
+| `重置前耗尽` | Codex 按预测速度（近 7 天净消耗与近 1 小时速率取较高者）预计会在限额窗口重置前用完时提醒 |
 | `消耗加速` | 近 15 分钟消耗速度达到此前 1 小时的 2.5 倍以上时提醒 |
 
 预警均为本机通知，并带冷却时间去重，避免短时间内重复弹出。Qoder / WorkBuddy 的耗尽预测与「净日均消耗」同口径：剔除每日领取、重置与套餐总量变化的影响，领取覆盖消耗时提示「按当前节奏不会耗尽」，样本不足时先显示「样本积累中」，仅供提前预警参考。
+
+Codex 的预测速度取「近 7 天净消耗折算时速」与「近 1 小时速率」中的较高者：前者保证隔几天集中用一次也能给出结论（不再因为最近一小时没动就显示「近期无明显消耗」），后者保证正在突发使用时不被 7 天均值摊平而低估风险；结论会与窗口重置时间比较，撑得到重置显示「可撑到重置（月度）」，撑不到则给出预计耗尽时刻并触发预警。悬停可见两条速度分别是多少。
 
 卡片底部会出现一条趋势行：左侧是近 7 天剩余曲线（Qoder / WorkBuddy 为剩余 Credits，Codex 为剩余比例），右侧是预测结论。历史数据不足（少于两个采样点）时暂不显示。
 
@@ -79,7 +81,7 @@ Q 1,770   W 12,480   C 8.5%
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.3` | 当前安装版本 |
+| `v1.4.4` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -115,11 +117,11 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.3-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.3-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.3.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.4-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.4-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.4.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.4/TokenTool-1.4.4.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.3/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.4/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -241,6 +243,12 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.4.4
+
+- Codex 耗尽预测并入净日均口径：速度取「近 7 天净消耗折算时速」与「近 1 小时速率」中较高者，隔几天集中使用一次也能给出「可撑到重置」或预计耗尽时刻，不再因为最近一小时没动就显示「近期无明显消耗」；突发使用时仍按小时速率给出及时预警。
+- 预测悬停文案改为同时给出两条速度（近 1 小时 %/小时、近 N 天净消耗 %/天），慢速消耗不再被四舍五入成「0%/小时」。
+- 「近期无明显消耗」只在近 1 小时与近 7 天净消耗都接近 0（约低于 0.5%/天）时出现。
+
 ### 1.4.3
 
 - Qoder CLI 可一键安装：未检测到官方 CLI 时，「安装 CLI」直接下载并执行官方安装脚本，装好后自动发起登录，全程无需打开终端；登录中 / 失败状态在卡片上实时提示，失败可「重试登录」或转终端处理。
@@ -325,7 +333,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.3（build 9） |
+| 当前版本 | 1.4.4（build 10） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

@@ -90,6 +90,8 @@ enum UsageAnalytics {
     static let rampRatio = 2.5
     static let rampMinimumRate = 1.5
     static let minimumInsightSpan: TimeInterval = 6 * 3600
+    /// 每小时百分点低于该值视为「无明显消耗」（约 0.5%/天）。
+    static let minimumForecastRate = 0.02
 
     private static let jumpThreshold = 0.75
     private static let day: TimeInterval = 86400
@@ -422,6 +424,7 @@ enum UsageAnalytics {
         }
 
         var projections: [WindowProjection] = []
+        var basis: [Int: String] = [:]
         var sawRate = false
         var sawZeroRate = false
         for window in input.windows {
@@ -433,19 +436,27 @@ enum UsageAnalytics {
                    currentReset != sampleReset { continue }
                 points.append((Double(sample.at), item.remainingPercent))
             }
-            points = points.filter { $0.at >= nowTs - rateWindow }
-            guard let rate = rate(points) else { continue }
-            sawRate = true
-            if rate <= 0.05 {
+            let hourly = rate(points.filter { $0.at >= nowTs - rateWindow })
+            let netDaily = netDailyPercent(points.filter { $0.at >= chartStart })
+            let dailyPerHour = (netDaily?.daily ?? 0) / 24
+            if hourly != nil || netDaily != nil { sawRate = true }
+            let ratePerHour = max(hourly ?? 0, dailyPerHour)
+            if ratePerHour <= minimumForecastRate {
                 sawZeroRate = true
                 continue
             }
             guard window.remainingPercent > 0 else { continue }
-            let hours = window.remainingPercent / rate
+            basis[window.minutes] = rateBasis(
+                hourly: hourly,
+                netDaily: netDaily,
+                dailyPerHour: dailyPerHour,
+                ratePerHour: ratePerHour
+            )
+            let hours = window.remainingPercent / ratePerHour
             projections.append(WindowProjection(
                 minutes: window.minutes,
                 remainingPercent: window.remainingPercent,
-                ratePerHour: rate,
+                ratePerHour: ratePerHour,
                 exhaustAt: now.addingTimeInterval(hours * 3600),
                 resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
             ))
@@ -454,15 +465,19 @@ enum UsageAnalytics {
         let values = downsample(chartPoints)
         guard sawRate else { return nil }
 
+        func basisText(_ minutes: Int, _ ratePerHour: Double) -> String {
+            basis[minutes] ?? "按近期速度约 \(rateText(ratePerHour))%/小时"
+        }
+
         if let risk = projections
             .filter({ $0.exhaustsBeforeReset })
             .min(by: { $0.exhaustAt < $1.exhaustAt }) {
             let hours = max(0, risk.exhaustAt.timeIntervalSince(now) / 3600)
-            var help = "按近期速度，\(windowText(risk.minutes))窗口预计 \(timeText(risk.exhaustAt)) 耗尽"
+            var help = "\(windowText(risk.minutes))窗口预计 \(timeText(risk.exhaustAt)) 耗尽"
             if let reset = risk.resetsAt {
                 help += "，早于重置时间 \(timeText(reset))"
             }
-            help += "；当前每小时约消耗 \(percentText(risk.ratePerHour))。"
+            help += "；" + basisText(risk.minutes, risk.ratePerHour) + "。"
             return UsageForecast(
                 values: values,
                 text: "\(windowText(risk.minutes))窗口预计 \(durationText(hours))后耗尽",
@@ -478,7 +493,7 @@ enum UsageAnalytics {
             let hours = max(0, primaryProjection.exhaustAt.timeIntervalSince(now) / 3600)
             if let reset = primaryProjection.resetsAt {
                 let remaining = primaryProjection.remainingPercent
-                let resetText = "按近期速度，预计 \(timeText(primaryProjection.exhaustAt)) 耗尽，重置时间 \(timeText(reset))，当前每小时约消耗 \(percentText(primaryProjection.ratePerHour))。"
+                let resetText = "预计 \(timeText(primaryProjection.exhaustAt)) 耗尽，重置时间 \(timeText(reset))，" + basisText(primary.minutes, primaryProjection.ratePerHour) + "。"
                 return UsageForecast(
                     values: values,
                     text: "可撑到重置（\(windowText(primary.minutes))）",
@@ -492,7 +507,7 @@ enum UsageAnalytics {
             return UsageForecast(
                 values: values,
                 text: "预计 \(durationText(hours))后耗尽",
-                help: "按近期速度，每小时约消耗 \(percentText(primaryProjection.ratePerHour))，仅供参考。",
+                help: basisText(primary.minutes, primaryProjection.ratePerHour) + "，仅供参考。",
                 warning: primaryProjection.remainingPercent <= lowThreshold,
                 remainingPercent: primaryProjection.remainingPercent,
                 ratePerHour: primaryProjection.ratePerHour,
@@ -505,7 +520,7 @@ enum UsageAnalytics {
             return UsageForecast(
                 values: values,
                 text: "\(windowText(projection.minutes))窗口预计 \(durationText(hours))后耗尽",
-                help: "按近期速度，每小时约消耗 \(percentText(projection.ratePerHour))，仅供参考。",
+                help: basisText(projection.minutes, projection.ratePerHour) + "，仅供参考。",
                 warning: projection.remainingPercent <= lowThreshold,
                 remainingPercent: projection.remainingPercent,
                 ratePerHour: projection.ratePerHour,
@@ -517,7 +532,7 @@ enum UsageAnalytics {
             return UsageForecast(
                 values: values,
                 text: "近期无明显消耗",
-                help: "近 7 天剩余比例趋势；当前消耗速度接近 0，暂无耗尽估算。",
+                help: "近 7 天剩余比例趋势；近 1 小时速率与近 7 天净消耗都接近 0，暂无耗尽估算。",
                 warning: false,
                 remainingPercent: primary.remainingPercent,
                 ratePerHour: 0,
@@ -525,6 +540,47 @@ enum UsageAnalytics {
             )
         }
         return nil
+    }
+
+    /// 近 7 天窗口内的净消耗（只累计剩余比例的下降，重置带来的上升不计入），折算成每天百分点。
+    private static func netDailyPercent(
+        _ points: [(at: Double, value: Double)]
+    ) -> (daily: Double, days: Int)? {
+        let sorted = points.sorted { $0.at < $1.at }
+        guard sorted.count >= 2,
+              let first = sorted.first,
+              let last = sorted.last,
+              last.at - first.at >= minimumInsightSpan else { return nil }
+        var consumed: Double = 0
+        for index in 1..<sorted.count {
+            let delta = sorted[index - 1].value - sorted[index].value
+            if delta > 0 { consumed += delta }
+        }
+        let days = min(chartDays, max(1, Int(ceil((last.at - first.at) / day))))
+        return (consumed / Double(days), days)
+    }
+
+    private static func rateBasis(
+        hourly: Double?,
+        netDaily: (daily: Double, days: Int)?,
+        dailyPerHour: Double,
+        ratePerHour: Double
+    ) -> String {
+        let recent = hourly ?? 0
+        if recent >= dailyPerHour, recent > 0 {
+            if let netDaily, netDaily.daily > 0 {
+                return "近 1 小时约消耗 \(rateText(recent))%/小时，近 \(netDaily.days) 天净消耗 \(rateText(netDaily.daily))%/天"
+            }
+            return "近 1 小时约消耗 \(rateText(recent))%/小时"
+        }
+        if let netDaily, netDaily.daily > 0 {
+            return "近 \(netDaily.days) 天净消耗 \(rateText(netDaily.daily))%/天，折算约 \(rateText(dailyPerHour))%/小时"
+        }
+        return "按近期速度约 \(rateText(ratePerHour))%/小时"
+    }
+
+    private static func rateText(_ value: Double) -> String {
+        value < 1 ? String(format: "%.2f", value) : String(format: "%.1f", value)
     }
 
     private static func rateSeries(
@@ -592,10 +648,6 @@ enum UsageAnalytics {
         return (0..<limit).map { index in
             values[Int((Double(index) * step).rounded())]
         }
-    }
-
-    private static func percentText(_ value: Double) -> String {
-        "\(Int(value.rounded()))%"
     }
 
     private static func creditText(_ value: Double) -> String {
