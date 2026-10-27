@@ -82,6 +82,9 @@ enum UsageAnalytics {
     static let defaultLowThreshold = 20.0
     static let lowRecoveryGap = 5.0
     static let lowCooldown: TimeInterval = 12 * 3600
+    /// 新提醒出现后菜单栏闪动的时长。
+    static let attentionBlinkDuration: TimeInterval = 60
+    static let attentionBlinkInterval: TimeInterval = 0.6
     static let rampCooldown: TimeInterval = 6 * 3600
     static let rateWindow: TimeInterval = 3600
     static let minimumRateSpan: TimeInterval = 240

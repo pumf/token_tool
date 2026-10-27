@@ -103,6 +103,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var lastCloseAt = Date.distantPast
     private var appliedMaxHeight: CGFloat = 0
+    private var blinkTimer: Timer?
+    private var blinkDimmed = false
 
     init(store: UsageStore, updates: UpdateChecker) {
         self.store = store
@@ -131,6 +133,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.updateTitle()
+                    self?.syncBlink()
                     self?.resizeIfNeeded()
                 }
             }
@@ -150,6 +153,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
         applyMaxHeightIfNeeded()
         updateTitle()
+        syncBlink()
         updateContentSize()
     }
 
@@ -160,6 +164,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         guard Date().timeIntervalSince(lastCloseAt) > 0.2 else { return }
         guard let button = statusItem.button else { return }
+        markAttentionSeen()
         applyMaxHeightIfNeeded()
         updateTitle()
         updateContentSize()
@@ -173,14 +178,57 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func updateTitle() {
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        var text = store.menuBarText
+        var color = NSColor.labelColor
+        let kind = store.attentionKind
+        if store.menuBarHighlight, !store.isAttentionMuted, kind != .none {
+            text = (kind == .warning ? "⚠ " : "＋ ") + text
+            color = kind == .warning ? .systemRed : .systemOrange
+            if blinkDimmed { color = color.withAlphaComponent(0.25) }
+        }
         button.attributedTitle = NSAttributedString(
-            string: store.menuBarText,
+            string: text,
             attributes: [
                 .font: font,
-                .foregroundColor: NSColor.labelColor,
+                .foregroundColor: color,
             ]
         )
         button.toolTip = store.menuBarTooltip
+    }
+
+    private func syncBlink() {
+        if store.attentionBlinkActive(now: Date()) {
+            guard blinkTimer == nil else { return }
+            let timer = Timer(timeInterval: UsageAnalytics.attentionBlinkInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.store.attentionBlinkActive(now: Date()) else {
+                        self.stopBlink()
+                        return
+                    }
+                    self.blinkDimmed.toggle()
+                    self.updateTitle()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            blinkTimer = timer
+        } else {
+            stopBlink()
+        }
+    }
+
+    private func stopBlink() {
+        blinkTimer?.invalidate()
+        blinkTimer = nil
+        if blinkDimmed {
+            blinkDimmed = false
+            updateTitle()
+        }
+    }
+
+    private func markAttentionSeen() {
+        store.markAttentionSeen()
+        stopBlink()
     }
 
     private var maxPanelHeight: CGFloat {

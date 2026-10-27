@@ -242,6 +242,25 @@ enum LaunchAtLogin {
     }
 }
 
+enum AttentionKind: Int, Comparable, Sendable {
+    case none = 0
+    case claim = 1
+    case warning = 2
+
+    static func < (lhs: AttentionKind, rhs: AttentionKind) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+struct AttentionItem: Identifiable, Sendable {
+    let id: String
+    let provider: UsageProvider
+    let kind: AttentionKind
+    let icon: String
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let canDismiss: Bool
+}
+
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var codex: ProviderResult?
@@ -286,12 +305,14 @@ final class UsageStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(alertLowBalance, forKey: "alert.low")
             prepareNotificationAuthorization()
+            recomputeAttention(now: Date())
         }
     }
     @Published var alertExhaustion: Bool {
         didSet {
             UserDefaults.standard.set(alertExhaustion, forKey: "alert.exhaustion")
             prepareNotificationAuthorization()
+            recomputeAttention(now: Date())
         }
     }
     @Published var alertAcceleration: Bool {
@@ -304,8 +325,18 @@ final class UsageStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(lowBalanceThreshold, forKey: "alert.low.threshold")
             resetLowAlertState()
+            recomputeAttention(now: Date())
         }
     }
+    @Published var menuBarHighlight: Bool {
+        didSet { UserDefaults.standard.set(menuBarHighlight, forKey: "attention.menuBar.highlight") }
+    }
+    @Published var menuBarBlink: Bool {
+        didSet { UserDefaults.standard.set(menuBarBlink, forKey: "attention.menuBar.blink") }
+    }
+    @Published private(set) var attentionItems: [AttentionItem] = []
+    @Published private(set) var attentionSince: Date?
+    @Published private(set) var mutedUntil: Date?
     @Published private(set) var notificationsDenied = false
     @Published private var qoderHistory: [UsageSample] = []
     @Published private var workbuddyHistory: [UsageSample] = []
@@ -367,9 +398,14 @@ final class UsageStore: ObservableObject {
         alertExhaustion = Self.storedFlag("alert.exhaustion")
         alertAcceleration = Self.storedFlag("alert.acceleration")
         lowBalanceThreshold = Self.storedLowThreshold()
+        menuBarHighlight = Self.storedFlag("attention.menuBar.highlight")
+        menuBarBlink = Self.storedFlag("attention.menuBar.blink")
+        let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
+        mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
         loadCache()
         loadHistory()
         seedHistoryFromCache()
+        recomputeAttention(now: Date())
         guard refreshOnStart else { return }
         refreshReminders()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -392,6 +428,251 @@ final class UsageStore: ObservableObject {
     var isRefreshing: Bool { fastRefreshing || qoderRefreshing }
     var lowThreshold: Double { Double(lowBalanceThreshold) }
     var lowRecovery: Double { lowThreshold + UsageAnalytics.lowRecoveryGap }
+
+    var attentionKind: AttentionKind { attentionItems.map(\.kind).max() ?? .none }
+    var isAttentionMuted: Bool {
+        guard let mutedUntil else { return false }
+        return mutedUntil > Date()
+    }
+    var mutedDescription: String {
+        guard let mutedUntil else { return "" }
+        return "静音中，\(Format.time(mutedUntil)) 自动恢复提醒"
+    }
+
+    private(set) var attentionIdentity: String = ""
+
+    /// 菜单栏是否需要闪动：新出现的提醒在 60 秒内、且用户还没打开过面板。
+    func attentionBlinkActive(now: Date) -> Bool {
+        guard menuBarHighlight, menuBarBlink, !isAttentionMuted, attentionKind != .none else {
+            return false
+        }
+        guard let since = attentionSince, acknowledgedAt < since else { return false }
+        return now.timeIntervalSince(since) <= UsageAnalytics.attentionBlinkDuration
+    }
+
+    func markAttentionSeen() {
+        acknowledgedAt = Date()
+    }
+
+    private var acknowledgedAt = Date.distantPast
+
+    func muteAttention(minutes: Int = 30) {
+        let until = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        mutedUntil = until
+        UserDefaults.standard.set(until.timeIntervalSince1970, forKey: "attention.mute.until")
+        recomputeAttention(now: Date())
+    }
+
+    func unmuteAttention() {
+        mutedUntil = nil
+        UserDefaults.standard.removeObject(forKey: "attention.mute.until")
+        recomputeAttention(now: Date())
+    }
+
+    func dismissClaimToday(_ provider: UsageProvider) {
+        UserDefaults.standard.set(
+            Self.dayKey(Date()),
+            forKey: "attention.claim.dismiss.\(provider.rawValue)"
+        )
+        recomputeAttention(now: Date())
+    }
+
+    func openClient(_ provider: UsageProvider) {
+        switch provider {
+        case .qoder:
+            Apps.open(bundleID: "com.qodercn.app", fallback: "/Applications/Qoder CN.app")
+        case .workbuddy:
+            Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
+        case .codex:
+            Apps.open(bundleID: "com.openai.codex", fallback: "/Applications/ChatGPT.app")
+        }
+    }
+
+    static func clientName(_ provider: UsageProvider) -> String {
+        switch provider {
+        case .qoder: return "Qoder"
+        case .workbuddy: return "WorkBuddy"
+        case .codex: return "ChatGPT"
+        }
+    }
+
+    private static func dayKey(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private func recomputeAttention(now: Date) {
+        if let mutedUntil, mutedUntil <= now {
+            self.mutedUntil = nil
+            UserDefaults.standard.removeObject(forKey: "attention.mute.until")
+        }
+        var items: [AttentionItem] = []
+        if mutedUntil == nil {
+            for provider in UsageProvider.allCases {
+                guard let result = currentResult(for: provider), result.ok == true else { continue }
+                let input = usageInput(result)
+                if let item = warningItem(provider: provider, input: input) {
+                    items.append(item)
+                } else if let item = claimItem(provider: provider, input: input, now: now) {
+                    items.append(item)
+                }
+            }
+        }
+        let ordered = items.filter { $0.kind == .warning } + items.filter { $0.kind == .claim }
+        applyAttention(ordered)
+    }
+
+    private func applyAttention(_ items: [AttentionItem]) {
+        attentionItems = items
+        let identity = items.map { "\($0.id):\($0.kind.rawValue)" }.joined(separator: ",")
+        guard identity != attentionIdentity else { return }
+        attentionIdentity = identity
+        attentionSince = identity.isEmpty ? nil : Date()
+    }
+
+    private func warningItem(provider: UsageProvider, input: UsageInput) -> AttentionItem? {
+        let percent = UsageAnalytics.currentPercent(provider: provider, input: input)
+        if alertLowBalance, let percent, percent <= lowThreshold {
+            return AttentionItem(
+                id: "low.\(provider.rawValue)",
+                provider: provider,
+                kind: .warning,
+                icon: "exclamationmark.triangle.fill",
+                title: "\(provider.displayName) 剩余 \(Int(percent.rounded()))%",
+                detail: "已低于 \(Int(lowThreshold))% 阈值，请留意消耗或等待额度重置。",
+                actionTitle: "打开 \(Self.clientName(provider))",
+                canDismiss: false
+            )
+        }
+        guard alertExhaustion,
+              let forecast = forecast(for: provider),
+              forecast.warning,
+              forecast.text.hasSuffix("后耗尽") else { return nil }
+
+        let detail: String
+        if provider == .codex,
+           let risk = forecast.windows.filter({ $0.exhaustsBeforeReset })
+               .min(by: { $0.exhaustAt < $1.exhaustAt }),
+           let reset = risk.resetsAt {
+            detail = "预计 \(Format.reset(Int(risk.exhaustAt.timeIntervalSince1970))) 耗尽，早于重置时间 \(Format.reset(Int(reset.timeIntervalSince1970)))。"
+        } else {
+            detail = "按近期净消耗速度估算，剩余额度撑不到下一次领取或重置。"
+        }
+        return AttentionItem(
+            id: "exhaust.\(provider.rawValue)",
+            provider: provider,
+            kind: .warning,
+            icon: "hourglass",
+            title: "\(provider.displayName) \(forecast.text)",
+            detail: detail,
+            actionTitle: "打开 \(Self.clientName(provider))",
+            canDismiss: false
+        )
+    }
+
+    private func claimItem(provider: UsageProvider, input: UsageInput, now: Date) -> AttentionItem? {
+        switch provider {
+        case .qoder:
+            return dailyClaimItem(
+                provider: .qoder,
+                enabled: remindQoderClaim,
+                claimHour: 10,
+                grant: "100 Credits",
+                input: input,
+                now: now
+            )
+        case .workbuddy:
+            return dailyClaimItem(
+                provider: .workbuddy,
+                enabled: remindWorkBuddyClaim,
+                claimHour: 0,
+                grant: "100 积分",
+                input: input,
+                now: now
+            )
+        case .codex:
+            guard remindCodexReset else { return nil }
+            let nowTs = now.timeIntervalSince1970
+            let upcoming = input.windows.compactMap { item -> (UsageWindow, Int)? in
+                guard let reset = item.resetsAt,
+                      Double(reset) - nowTs > 0,
+                      Double(reset) - nowTs <= 20 * 60 else {
+                    return nil
+                }
+                return (item, reset)
+            }
+            guard let (window, reset) = upcoming.min(by: { $0.1 < $1.1 }) else { return nil }
+            let key = "attention.claim.dismiss.codex"
+            if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
+            return AttentionItem(
+                id: "claim.codex",
+                provider: .codex,
+                kind: .claim,
+                icon: "clock.arrow.circlepath",
+                title: "Codex \(UsageAnalytics.windowText(window.minutes))窗口即将重置",
+                detail: "\(Format.reset(reset)) 刷新额度，重置后可继续使用。",
+                actionTitle: "打开 \(Self.clientName(.codex))",
+                canDismiss: true
+            )
+        }
+    }
+
+    private func dailyClaimItem(
+        provider: UsageProvider,
+        enabled: Bool,
+        claimHour: Int,
+        grant: String,
+        input: UsageInput,
+        now: Date
+    ) -> AttentionItem? {
+        guard enabled else { return nil }
+        guard let remaining = input.remaining,
+              let total = input.total,
+              total > 0,
+              remaining < total - 0.5 else { return nil }
+        guard let claimAt = Calendar.current.date(
+            bySettingHour: claimHour, minute: 0, second: 0, of: now
+        ), now >= claimAt else { return nil }
+        let key = "attention.claim.dismiss.\(provider.rawValue)"
+        if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
+        guard !receivedClaimSince(provider: provider, since: claimAt, now: now) else { return nil }
+        return AttentionItem(
+            id: "claim.\(provider.rawValue)",
+            provider: provider,
+            kind: .claim,
+            icon: "gift.fill",
+            title: "\(provider.displayName) 今日 \(grant) 待领取",
+            detail: "领取成功后此提示会自动消失；今天不需要可先忽略。",
+            actionTitle: "打开 \(Self.clientName(provider))",
+            canDismiss: true
+        )
+    }
+
+    private func receivedClaimSince(provider: UsageProvider, since: Date, now: Date) -> Bool {
+        let sinceTs = Int(since.timeIntervalSince1970)
+        let nowTs = Int(now.timeIntervalSince1970)
+        let samples = history(for: provider)
+        let today = samples.filter { $0.at >= sinceTs && $0.at <= nowTs }
+        if let baseline = samples.last(where: { $0.at < sinceTs })?.remaining,
+           let latest = today.last?.remaining,
+           latest > baseline + 0.5 {
+            return true
+        }
+        guard today.count >= 2 else { return false }
+        for index in 1..<today.count {
+            if let previous = today[index - 1].remaining,
+               let current = today[index].remaining,
+               current > previous + 0.5 {
+                return true
+            }
+        }
+        return false
+    }
 
     func refreshAll() {
         refreshFast()
@@ -424,6 +705,7 @@ final class UsageStore: ObservableObject {
                 self.lastFastAt = Date()
                 self.fastRefreshing = false
                 self.saveCache()
+                self.recomputeAttention(now: Date())
             }
         }
     }
@@ -443,6 +725,7 @@ final class UsageStore: ObservableObject {
                 self.lastQoderAt = Date()
                 self.qoderRefreshing = false
                 self.saveCache()
+                self.recomputeAttention(now: Date())
             }
         }
     }
@@ -569,6 +852,7 @@ final class UsageStore: ObservableObject {
     private func reminderSettingChanged() {
         refreshReminders()
         prepareNotificationAuthorization()
+        recomputeAttention(now: Date())
     }
 
     private func prepareNotificationAuthorization() {
@@ -1019,6 +1303,8 @@ enum Theme {
     static let workbuddy = Color(red: 0.10, green: 0.68, blue: 0.42)
     static let codex = Color(red: 0.55, green: 0.36, blue: 0.95)
     static let warning = Color.orange
+    static let danger = Color(nsColor: .systemRed)
+    static let claim = Color(nsColor: .systemOrange)
 }
 
 enum Token {
@@ -1440,6 +1726,9 @@ extension UsageStore {
 
     var menuBarTooltip: String {
         var parts: [String] = []
+        if !isAttentionMuted, let item = attentionItems.first {
+            parts.append(item.kind == .warning ? "需要关注：\(item.title)" : "待处理：\(item.title)")
+        }
         if let qoder, qoder.ok == true {
             var line = "Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits"
             if let suffix = forecastSuffix(for: .qoder) { line += " · \(suffix)" }
@@ -1505,6 +1794,7 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Token.spaceSection) {
             header
+            attentionStrip
             updateBanner
             qoderCard
             workbuddyCard
@@ -1632,6 +1922,99 @@ struct MenuContent: View {
                 .fill(Token.insetFill)
         )
         .transition(.opacity)
+    }
+
+    @ViewBuilder
+    private var attentionStrip: some View {
+        if store.isAttentionMuted {
+            HStack(spacing: 4) {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(store.mutedDescription)
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button("取消静音") {
+                    store.unmuteAttention()
+                }
+                .buttonStyle(.plain)
+                .font(Token.caption)
+                .foregroundStyle(Theme.claim)
+            }
+            .padding(.horizontal, Token.spaceTight + 2)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                    .fill(Token.insetFill)
+            )
+        } else if !store.attentionItems.isEmpty {
+            VStack(alignment: .leading, spacing: Token.spaceTight) {
+                ForEach(store.attentionItems) { item in
+                    attentionRow(item)
+                }
+                HStack(spacing: 6) {
+                    Text("\(store.attentionItems.count) 项需要留意")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Button("静音 30 分钟") {
+                        store.muteAttention()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(attentionTint.opacity(0.9))
+                    .help("30 分钟内不再高亮菜单栏、也不再显示这条提示")
+                }
+            }
+            .padding(Token.spaceRow)
+            .background(
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                    .fill(attentionTint.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                    .stroke(attentionTint.opacity(0.32), lineWidth: Token.hairline)
+            )
+        }
+    }
+
+    private var attentionTint: Color {
+        store.attentionKind == .warning ? Theme.danger : Theme.claim
+    }
+
+    private func attentionRow(_ item: AttentionItem) -> some View {
+        HStack(alignment: .top, spacing: Token.spaceTight) {
+            Image(systemName: item.icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(item.kind == .warning ? Theme.danger : Theme.claim)
+                .frame(width: 14, alignment: .top)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(Token.title)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(item.detail)
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Token.spaceTight)
+            VStack(alignment: .trailing, spacing: 3) {
+                Button(item.actionTitle) {
+                    store.openClient(item.provider)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+                if item.canDismiss {
+                    Button("今天不再提醒") {
+                        store.dismissClaimToday(item.provider)
+                    }
+                    .buttonStyle(.plain)
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -2111,6 +2494,7 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
     private var menuBarSettings: some View {
         settingRow("菜单栏") {
             settingChip(
@@ -2133,6 +2517,22 @@ struct MenuContent: View {
                 iconOn: "eye.fill",
                 iconOff: "eye.slash",
                 help: "在菜单栏显示 Codex"
+            )
+        }
+        settingRow("注意力") {
+            settingChip(
+                "高亮",
+                isOn: $store.menuBarHighlight,
+                iconOn: "paintbrush.pointed.fill",
+                iconOff: "paintbrush.pointed",
+                help: "有告警时菜单栏文字变红并加 ⚠，待领取时变橙色"
+            )
+            settingChip(
+                "闪动",
+                isOn: $store.menuBarBlink,
+                iconOn: "lightbulb.fill",
+                iconOff: "lightbulb",
+                help: "新提醒出现后菜单栏闪动 60 秒，打开面板即停止"
             )
         }
     }
