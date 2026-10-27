@@ -112,7 +112,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         )
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
-        hostingView.frame = NSRect(x: 0, y: 0, width: 382, height: 1)
+        hostingView.frame = NSRect(x: 0, y: 0, width: Token.panelWidth, height: 1)
         let controller = NSViewController()
         controller.view = hostingView
         popover.contentViewController = controller
@@ -203,7 +203,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let fitting = hostingView.fittingSize
         let height = min(ceil(fitting.height), appliedMaxHeight)
         popover.contentSize = NSSize(
-            width: max(382, ceil(fitting.width)),
+            width: max(Token.panelWidth, ceil(fitting.width)),
             height: max(1, height)
         )
     }

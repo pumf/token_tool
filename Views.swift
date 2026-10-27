@@ -56,6 +56,15 @@ struct CollectorOutput: Decodable, Sendable {
     let providers: [String: ProviderResult]?
 }
 
+struct CollectorAction: Decodable, Sendable {
+    let ok: Bool
+    let status: String?
+    let cli: String?
+    let url: String?
+    let message: String?
+    let error: String?
+}
+
 enum NotificationCategory {
     static let qoder = "provider.qoder"
     static let workbuddy = "provider.workbuddy"
@@ -76,26 +85,85 @@ enum CollectorRunner {
         let error: String?
     }
 
+    struct ActionResult: Sendable {
+        let action: CollectorAction?
+        let error: String?
+    }
+
+    private struct ActionEnvelope: Decodable {
+        let result: CollectorAction?
+    }
+
     static func run(provider: String, timeout: TimeInterval = 80) -> RunResult {
+        switch execute(["--provider", provider], timeout: timeout) {
+        case .failure(let message):
+            return RunResult(output: nil, error: message)
+        case .success(let data):
+            do {
+                return RunResult(
+                    output: try JSONDecoder().decode(CollectorOutput.self, from: data),
+                    error: nil
+                )
+            } catch {
+                return RunResult(output: nil, error: "采集器输出无法解析")
+            }
+        }
+    }
+
+    static func action(_ name: String, timeout: TimeInterval) -> ActionResult {
+        switch execute(["--action", name], timeout: timeout) {
+        case .failure(let message):
+            return ActionResult(action: nil, error: message)
+        case .success(let data):
+            guard let envelope = try? JSONDecoder().decode(ActionEnvelope.self, from: data),
+                  let result = envelope.result else {
+                return ActionResult(action: nil, error: "采集器输出无法解析")
+            }
+            if !result.ok {
+                return ActionResult(action: result, error: result.error ?? "操作失败")
+            }
+            return ActionResult(action: result, error: nil)
+        }
+    }
+
+    private enum Capture {
+        case success(Data)
+        case failure(String)
+    }
+
+    // Output goes to temp files rather than pipes: install scripts can write more
+    // than the 64KB pipe buffer and would otherwise block the child process.
+    private static func execute(_ arguments: [String], timeout: TimeInterval) -> Capture {
         guard let script = Bundle.main.url(forResource: "collector", withExtension: "py") else {
-            return RunResult(output: nil, error: "采集器文件缺失")
+            return .failure("采集器文件缺失")
+        }
+        let directory = FileManager.default.temporaryDirectory
+        let outputURL = directory.appendingPathComponent("tokentool-\(UUID().uuidString).out")
+        let errorURL = directory.appendingPathComponent("tokentool-\(UUID().uuidString).err")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        FileManager.default.createFile(atPath: errorURL.path, contents: nil)
+        defer {
+            try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: errorURL)
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", script.path, "--provider", provider]
+        process.arguments = ["python3", script.path] + arguments
         var environment = ProcessInfo.processInfo.environment
         let extraPath = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         environment["PATH"] = extraPath + ":" + (environment["PATH"] ?? "")
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
+        guard let outputHandle = try? FileHandle(forWritingTo: outputURL),
+              let errorHandle = try? FileHandle(forWritingTo: errorURL) else {
+            return .failure("无法创建采集器输出文件")
+        }
+        process.standardOutput = outputHandle
+        process.standardError = errorHandle
         do {
             try process.run()
         } catch {
-            return RunResult(output: nil, error: "无法启动采集器")
+            return .failure("无法启动采集器")
         }
 
         let deadline = Date().addingTimeInterval(timeout)
@@ -108,20 +176,14 @@ enum CollectorRunner {
             if process.isRunning {
                 Darwin.kill(process.processIdentifier, SIGKILL)
             }
-            return RunResult(output: nil, error: "采集超时")
+            return .failure("采集超时")
         }
-
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        _ = stderr.fileHandleForReading.readDataToEndOfFile()
-        guard !data.isEmpty else {
-            return RunResult(output: nil, error: "采集器没有返回数据")
+        outputHandle.closeFile()
+        errorHandle.closeFile()
+        guard let data = try? Data(contentsOf: outputURL), !data.isEmpty else {
+            return .failure("采集器没有返回数据")
         }
-        do {
-            let output = try JSONDecoder().decode(CollectorOutput.self, from: data)
-            return RunResult(output: output, error: nil)
-        } catch {
-            return RunResult(output: nil, error: "采集器输出无法解析")
-        }
+        return .success(data)
     }
 }
 
@@ -382,6 +444,105 @@ final class UsageStore: ObservableObject {
                 self.qoderRefreshing = false
                 self.saveCache()
             }
+        }
+    }
+
+    enum QoderSetupPhase: Equatable {
+        case idle
+        case installing
+        case preparing
+        case waitingAuth(URL)
+        case failed(String)
+
+        var isBusy: Bool {
+            switch self {
+            case .installing, .preparing, .waitingAuth:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    @Published private(set) var qoderSetup: QoderSetupPhase = .idle
+    private var loginPoll: Task<Void, Never>?
+
+    func installQoderCLI() {
+        guard !qoderSetup.isBusy else { return }
+        guard Apps.confirm(
+            title: "安装 Qoder CLI",
+            info: "将从 Qoder 官方地址下载并执行安装脚本，完成后自动在浏览器发起登录授权。"
+        ) else { return }
+        qoderSetup = .installing
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = CollectorRunner.action("qoder-install", timeout: 320)
+            guard let self else { return }
+            await MainActor.run {
+                if let error = result.error {
+                    self.qoderSetup = .failed(error)
+                    self.qoderError = error
+                    return
+                }
+                self.qoderSetup = .idle
+                self.loginQoderCLI()
+            }
+        }
+    }
+
+    func loginQoderCLI() {
+        guard !qoderSetup.isBusy else { return }
+        qoderSetup = .preparing
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = CollectorRunner.action("qoder-login", timeout: 45)
+            guard let self else { return }
+            await MainActor.run {
+                if let error = result.error {
+                    self.qoderSetup = .failed(error)
+                    return
+                }
+                guard let string = result.action?.url, let url = URL(string: string) else {
+                    self.qoderSetup = .failed("未获取到授权链接，请稍后重试")
+                    return
+                }
+                NSWorkspace.shared.open(url)
+                self.qoderSetup = .waitingAuth(url)
+                self.pollQoderLogin()
+            }
+        }
+    }
+
+    func cancelQoderSetup() {
+        loginPoll?.cancel()
+        loginPoll = nil
+        qoderSetup = .idle
+    }
+
+    private func pollQoderLogin() {
+        loginPoll?.cancel()
+        loginPoll = Task { @MainActor [weak self] in
+            let deadline = Date().addingTimeInterval(300)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                guard self.qoderSetup.isBusy else { return }
+                let result = await Task.detached(priority: .utility) {
+                    CollectorRunner.action("qoder-login-status", timeout: 20)
+                }.value
+                guard self.qoderSetup.isBusy, !Task.isCancelled else { return }
+                switch result.action?.status {
+                case "done":
+                    self.qoderSetup = .idle
+                    self.qoderError = nil
+                    self.refreshQoder()
+                    return
+                case "failed":
+                    self.qoderSetup = .failed(result.action?.message ?? "登录未完成")
+                    return
+                default:
+                    continue
+                }
+            }
+            self?.qoderSetup = .failed("登录等待超时，请重新发起")
         }
     }
 
@@ -860,6 +1021,31 @@ enum Theme {
     static let warning = Color.orange
 }
 
+enum Token {
+    static let radiusCard: CGFloat = 12
+    static let radiusControl: CGFloat = 8
+
+    static let spaceTight: CGFloat = 6
+    static let spaceRow: CGFloat = 8
+    static let spaceCard: CGFloat = 12
+    static let spaceSection: CGFloat = 12
+
+    static let panelWidth: CGFloat = 382
+
+    static let value = Font.system(size: 22, weight: .semibold)
+    static let title = Font.system(size: 13, weight: .semibold)
+    static let body = Font.system(size: 11, weight: .medium)
+    static let label = Font.system(size: 11, weight: .medium)
+    static let meta = Font.system(size: 10)
+    static let caption = Font.system(size: 10)
+
+    static let cardFill = Color(nsColor: .controlBackgroundColor)
+    static let cardStroke = Color(nsColor: .separatorColor)
+    static let insetFill = Color.primary.opacity(0.04)
+    static let hairline: CGFloat = 0.5
+    static let detailMinHeight: CGFloat = 72
+}
+
 enum Format {
     static let decimal: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -889,6 +1075,15 @@ enum Format {
     static func percent(_ value: Double?) -> String {
         guard let value, value.isFinite else { return "--" }
         return "\(Int(value.rounded()))%"
+    }
+
+    static func ago(_ date: Date?) -> String {
+        guard let date else { return "从未" }
+        let seconds = max(0, Date().timeIntervalSince(date))
+        if seconds < 60 { return "刚刚" }
+        if seconds < 3600 { return "\(Int(seconds / 60)) 分钟前" }
+        if seconds < 86400 { return "\(Int(seconds / 3600)) 小时前" }
+        return "\(Int(seconds / 86400)) 天前"
     }
 
     static func window(_ minutes: Int) -> String {
@@ -939,13 +1134,13 @@ struct UsageBar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Token.spaceTight - 2) {
             HStack(spacing: 8) {
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Token.label)
                 Spacer(minLength: 8)
                 Text(detail)
-                    .font(.system(size: 10))
+                    .font(Token.meta)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -955,7 +1150,7 @@ struct UsageBar: View {
                     Capsule().fill(tint).frame(width: max(3, geometry.size.width * normalized))
                 }
             }
-            .frame(height: 5)
+            .frame(height: 6)
             .animation(.easeOut(duration: 0.25), value: normalized)
         }
     }
@@ -964,16 +1159,18 @@ struct UsageBar: View {
 struct Sparkline: View {
     let values: [Double]
     let tint: Color
+    var days: Int = UsageAnalytics.chartDays
 
     var body: some View {
         GeometryReader { geometry in
             let points = self.points(in: geometry.size)
-            if points.count >= 2, let last = points.last {
-                ZStack {
+            ZStack(alignment: .topLeading) {
+                baseline(in: geometry.size)
+                if points.count >= 2, let last = points.last {
                     areaPath(points: points, height: geometry.size.height)
                         .fill(
                             LinearGradient(
-                                colors: [tint.opacity(0.16), tint.opacity(0.01)],
+                                colors: [tint.opacity(0.18), tint.opacity(0.02)],
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
@@ -983,28 +1180,59 @@ struct Sparkline: View {
                             tint,
                             style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round)
                         )
+                    todayMarker(in: geometry.size)
                     Circle()
                         .fill(tint)
                         .frame(width: 3, height: 3)
                         .position(last)
+                } else {
+                    Capsule()
+                        .fill(tint.opacity(0.12))
+                        .frame(height: 2)
+                        .frame(maxHeight: .infinity)
                 }
-            } else {
-                Capsule()
-                    .fill(tint.opacity(0.12))
-                    .frame(height: 2)
-                    .frame(maxHeight: .infinity)
             }
         }
-        .accessibilityLabel("近 7 天剩余趋势")
+        .accessibilityLabel("近 \(days) 天剩余趋势，虚线为今日起点")
+    }
+
+    private func baseline(in size: CGSize) -> Path {
+        var path = Path()
+        guard size.width > 0, size.height > 0 else { return path }
+        path.move(to: CGPoint(x: 0, y: size.height - Token.hairline))
+        path.addLine(to: CGPoint(x: size.width, y: size.height - Token.hairline))
+        return path
+    }
+
+    private func todayMarker(in size: CGSize) -> some View {
+        Path { path in
+            let x = size.width * todayFraction
+            path.move(to: CGPoint(x: x, y: 1))
+            path.addLine(to: CGPoint(x: x, y: size.height - 1))
+        }
+        .stroke(
+            Color(nsColor: .secondaryLabelColor).opacity(0.6),
+            style: StrokeStyle(lineWidth: Token.hairline, dash: [1.5, 1.5])
+        )
+    }
+
+    private var todayFraction: CGFloat {
+        let now = Date()
+        let span = TimeInterval(max(1, days)) * 86400
+        let chartStart = now.addingTimeInterval(-span)
+        let startOfToday = Calendar.current.startOfDay(for: now)
+        let raw = startOfToday.timeIntervalSince(chartStart) / max(span, 1)
+        return min(max(CGFloat(raw), 0), 1)
     }
 
     private func points(in size: CGSize) -> [CGPoint] {
         guard values.count >= 2, size.width > 0, size.height > 0 else { return [] }
         let minimum = values.min() ?? 0
-        let maximum = values.max() ?? 100
-        let low = max(0, minimum - 4)
-        let high = min(100, maximum + 4)
-        let span = max(high - low, 4)
+        let maximum = values.max() ?? 0
+        let padding = max(1.0, (maximum - minimum) * 0.08)
+        let low = max(0, minimum - padding)
+        let high = maximum + padding
+        let span = max(high - low, padding)
         return values.enumerated().map { index, value in
             let x = size.width * CGFloat(index) / CGFloat(values.count - 1)
             let normalized = (value - low) / span
@@ -1041,19 +1269,21 @@ struct ProviderLink {
     let title: String
     let icon: String
     let help: String
-    let action: () -> Void
+    let action: (() -> Void)?
 }
 
-struct ProviderCard<Content: View>: View {
+struct ProviderCard<Detail: View>: View {
     let title: String
     let subtitle: String
     let icon: String
     let color: Color
     let plan: String?
-    let error: String?
+    let value: String
+    let valueCaption: String
+    let status: String?
     let footer: String
     let links: [ProviderLink]
-    let content: Content
+    let detail: Detail
 
     init(
         title: String,
@@ -1061,26 +1291,30 @@ struct ProviderCard<Content: View>: View {
         icon: String,
         color: Color,
         plan: String? = nil,
-        error: String? = nil,
+        value: String,
+        valueCaption: String,
+        status: String? = nil,
         footer: String,
         links: [ProviderLink] = [],
-        @ViewBuilder content: () -> Content
+        @ViewBuilder detail: () -> Detail
     ) {
         self.title = title
         self.subtitle = subtitle
         self.icon = icon
         self.color = color
         self.plan = plan
-        self.error = error
+        self.value = value
+        self.valueCaption = valueCaption
+        self.status = status
         self.footer = footer
         self.links = links
-        self.content = content()
+        self.detail = detail()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 9) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+        VStack(alignment: .leading, spacing: Token.spaceRow) {
+            HStack(spacing: Token.spaceRow) {
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
                     .fill(color.opacity(0.14))
                     .frame(width: 28, height: 28)
                     .overlay {
@@ -1090,67 +1324,107 @@ struct ProviderCard<Content: View>: View {
                     }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Token.title)
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(Token.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: Token.spaceRow)
                 if let plan {
                     Text(plan)
                         .font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(color.opacity(0.13)))
-                        .foregroundStyle(color)
+                        .background(Capsule().fill(Token.insetFill))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Color.clear.frame(width: 24, height: 1)
                 }
             }
+            .frame(height: 28)
 
-            content
+            HStack(alignment: .firstTextBaseline, spacing: Token.spaceTight) {
+                Text(value)
+                    .font(Token.value)
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: Token.spaceTight)
+                Text(valueCaption)
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .multilineTextAlignment(.trailing)
+            }
+            .frame(minHeight: 27)
 
-            if let error {
-                HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: Token.spaceTight) {
+                detail
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: status == nil ? Token.detailMinHeight : 0, alignment: .top)
+
+            if let status {
+                HStack(alignment: .top, spacing: Token.spaceTight - 2) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                    Text(error)
                         .font(.system(size: 10))
+                    Text(status)
+                        .font(Token.meta)
                         .lineLimit(2)
+                    Spacer(minLength: 0)
                 }
                 .foregroundStyle(Theme.warning)
+                .padding(.horizontal, Token.spaceTight)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                        .fill(Theme.warning.opacity(0.10))
+                )
+                .help(status)
             }
 
-            HStack(spacing: 9) {
+            Divider()
+                .overlay(Color(nsColor: .separatorColor).opacity(0.5))
+
+            HStack(spacing: Token.spaceRow) {
                 Text(footer)
-                    .font(.system(size: 9))
+                    .font(Token.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                Spacer(minLength: 4)
+                Spacer(minLength: Token.spaceTight)
                 ForEach(Array(links.enumerated()), id: \.offset) { _, link in
                     Button {
-                        link.action()
+                        link.action?()
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: link.icon)
-                                .font(.system(size: 8, weight: .semibold))
+                                .font(.system(size: 10, weight: .semibold))
                             Text(link.title)
-                                .font(.system(size: 9, weight: .medium))
+                                .font(.system(size: 10, weight: .medium))
                         }
-                        .foregroundStyle(color)
-                        .padding(.vertical, 2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                                .fill(Color.clear)
+                        )
                     }
                     .buttonStyle(.plain)
+                    .disabled(link.action == nil)
                     .help(link.help)
                 }
             }
+            .frame(height: 20)
         }
-        .padding(11)
+        .padding(Token.spaceCard)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill(Token.cardFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
         )
     }
 }
@@ -1220,23 +1494,31 @@ extension UsageStore {
 struct MenuContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var updates: UpdateChecker
+    @State private var settingsExpanded: Bool
+
+    init(store: UsageStore, updates: UpdateChecker, settingsExpanded: Bool = false) {
+        self.store = store
+        self.updates = updates
+        self._settingsExpanded = State(initialValue: settingsExpanded)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: Token.spaceSection) {
             header
             updateBanner
             qoderCard
             workbuddyCard
             codexCard
-            menuBarSettings
-            reminderSettings
-            alertSettings
+            quickBar
+            if settingsExpanded {
+                settingsPanel
+            }
             Divider()
             aboutRow
             footer
         }
-        .padding(14)
-        .frame(width: 382)
+        .padding(Token.spaceSection + 2)
+        .frame(width: Token.panelWidth)
         .onAppear {
             store.refreshNotificationStatus()
             updates.checkIfNeeded()
@@ -1249,7 +1531,7 @@ struct MenuContent: View {
                 Text("AI 用量")
                     .font(.system(size: 16, weight: .bold))
                 Text("Qoder · WorkBuddy · Codex")
-                    .font(.system(size: 10))
+                    .font(Token.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -1269,52 +1551,174 @@ struct MenuContent: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+            Button {
+                settingsExpanded.toggle()
+            } label: {
+                Image(systemName: settingsExpanded ? "gearshape.fill" : "gearshape")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help(settingsExpanded ? "收起设置" : "展开菜单栏显示、提醒与智能预警设置")
+            .accessibilityLabel("设置")
         }
+    }
+
+    private var quickBar: some View {
+        HStack(spacing: Token.spaceTight) {
+            Image(systemName: "clock")
+                .font(.system(size: 10, weight: .semibold))
+            Text("刷新 \(Format.time(store.lastFastAt))")
+            Text("·").foregroundStyle(.quaternary)
+            Text("Qoder \(Format.time(store.lastQoderAt))")
+            Spacer(minLength: Token.spaceTight)
+            settingChip(
+                "预警 \(store.lowBalanceThreshold)%",
+                isOn: $store.alertLowBalance,
+                iconOn: "exclamationmark.triangle.fill",
+                iconOff: "exclamationmark.triangle",
+                help: "任一平台剩余低于 \(store.lowBalanceThreshold)% 时提醒"
+            )
+            Button {
+                settingsExpanded.toggle()
+            } label: {
+                HStack(spacing: 3) {
+                    Text("更多设置")
+                        .font(.system(size: 10, weight: .medium))
+                    Image(systemName: settingsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(settingsExpanded ? "收起设置" : "展开更多设置")
+        }
+        .font(Token.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, Token.spaceTight + 2)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                .fill(Token.insetFill)
+        )
+    }
+
+    private var settingsPanel: some View {
+        VStack(alignment: .leading, spacing: Token.spaceRow) {
+            menuBarSettings
+            reminderSettings
+            alertSettings
+            if store.notificationsDenied {
+                HStack(spacing: 4) {
+                    Image(systemName: "bell.slash.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("系统通知未授权，提醒与预警不会弹出")
+                    Spacer(minLength: 4)
+                    Button("去开启") {
+                        Apps.openURL("x-apple.systempreferences:com.apple.preference.notifications")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.warning)
+                }
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(Token.spaceTight + 2)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill(Token.insetFill)
+        )
+        .transition(.opacity)
     }
 
     @ViewBuilder
     private var updateBanner: some View {
         if let release = updates.pendingRelease {
-            HStack(spacing: 8) {
+            HStack(spacing: Token.spaceRow) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 17))
                     .foregroundStyle(Theme.qoder)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("新版本 \(release.version) 可用")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     Text(updateSubtitle)
-                        .font(.system(size: 8))
+                        .font(Token.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
                 }
-                Spacer(minLength: 4)
+                Spacer(minLength: Token.spaceTight)
                 Button(updates.primaryActionTitle) {
                     updates.performPrimaryAction()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .disabled(!updates.canPerformPrimaryAction)
             }
-            .padding(8)
+            .padding(Token.spaceRow)
             .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                     .fill(Theme.qoder.opacity(0.10))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(Theme.qoder.opacity(0.20), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                    .stroke(Theme.qoder.opacity(0.20), lineWidth: Token.hairline)
             )
             .help(releaseHelp(release))
+        } else if updates.showsResult {
+            resultBanner
         }
+    }
+
+    private var resultBanner: some View {
+        let failure = updates.lastError
+        return HStack(spacing: Token.spaceRow) {
+            Image(systemName: failure == nil ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(failure == nil ? Theme.workbuddy : Theme.warning)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(failure == nil ? "已是最新版本 v\(updates.currentVersion)" : "检查更新失败")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(
+                    failure == nil
+                        ? "上次检查 \(Format.time(updates.lastCheckAt)) · 每 24 小时自动检查一次"
+                        : failure!
+                )
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+            Spacer(minLength: Token.spaceTight)
+            Button("知道了") {
+                updates.dismissResult()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .font(.system(size: 10, weight: .medium))
+        }
+        .padding(Token.spaceRow)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill((failure == nil ? Theme.workbuddy : Theme.warning).opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .stroke((failure == nil ? Theme.workbuddy : Theme.warning).opacity(0.20), lineWidth: Token.hairline)
+        )
     }
 
     private var updateSubtitle: String {
         switch updates.state {
         case .downloading:
             return "正在下载安装包…"
-        case .ready:
-            return "安装包已打开，拖入「应用程序」完成升级"
+        case .ready(_, _, let verified):
+            return verified
+                ? "SHA-256 已校验 · 拖入「应用程序」完成升级"
+                : "未找到校验值，SHA-256 未校验 · 拖入「应用程序」完成升级"
         default:
             return "当前 v\(updates.currentVersion)，可下载对应芯片安装包"
         }
@@ -1333,7 +1737,9 @@ struct MenuContent: View {
             icon: "curlybraces",
             color: Theme.qoder,
             plan: Format.plan(store.qoder?.plan),
-            error: store.qoderError,
+            value: store.qoder?.ok == true ? Format.credits(store.qoder?.remaining) : "--",
+            valueCaption: qoderCaption,
+            status: store.qoderError,
             footer: qoderFooter,
             links: qoderLinks
         ) {
@@ -1345,7 +1751,7 @@ struct MenuContent: View {
                 if addonTotal > 0 {
                     UsageBar(
                         label: "附加额度",
-                        detail: "剩余 \(Format.credits(addonTotal - addonUsed)) / \(Format.credits(addonTotal))",
+                        detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
                         fraction: addonUsed / addonTotal,
                         tint: Theme.qoder
                     )
@@ -1353,31 +1759,34 @@ struct MenuContent: View {
                 if planTotal > 0 {
                     UsageBar(
                         label: "套餐额度",
-                        detail: "剩余 \(Format.credits(planTotal - planUsed)) / \(Format.credits(planTotal))",
+                        detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
                         fraction: planUsed / planTotal,
                         tint: Theme.qoder
                     )
                 }
                 if addonTotal == 0 && planTotal == 0 {
                     Text("当前套餐未包含 Credits")
-                        .font(.system(size: 11))
+                        .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    Text("已用 \(Format.credits(qoder.used)) Credits")
-                    Spacer()
-                    if let expires = qoder.planExpiresAt, expires != "N/A", !expires.isEmpty {
-                        Text("到期 \(expires)")
-                    }
+                if let expires = qoder.planExpiresAt, expires != "N/A", !expires.isEmpty {
+                    Text("套餐到期 \(expires)")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
                 insightRow(.qoder)
                 forecastRow(.qoder, tint: Theme.qoder)
             } else {
                 emptyContent
             }
         }
+    }
+
+    private var qoderCaption: String {
+        guard store.qoder?.ok == true, let total = store.qoder?.total, total > 0 else {
+            return "等待采集"
+        }
+        return "剩余 / 共 \(Format.credits(total)) Credits"
     }
 
     private var workbuddyCard: some View {
@@ -1387,34 +1796,41 @@ struct MenuContent: View {
             icon: "briefcase.fill",
             color: Theme.workbuddy,
             plan: Format.plan(store.workbuddy?.plan),
-            error: store.workbuddyError,
+            value: store.workbuddy?.ok == true ? Format.credits(store.workbuddy?.remaining) : "--",
+            valueCaption: workbuddyCaption,
+            status: store.workbuddyError,
             footer: workbuddyFooter,
             links: workbuddyLinks
         ) {
             if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
                 UsageBar(
                     label: "Credits",
-                    detail: "剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(total))",
+                    detail: "已用 \(Format.credits(workbuddy.used)) / \(Format.credits(total))",
                     fraction: (workbuddy.usedPercent ?? 0) / 100,
                     tint: Theme.workbuddy
                 )
-                HStack(spacing: 8) {
-                    Text("已用 \(Format.credits(workbuddy.used)) Credits")
-                    Spacer()
-                    Text("\(workbuddy.packages ?? 0) 个资源包")
+                if let packages = workbuddy.packages, packages > 0 {
+                    Text("\(packages) 个资源包")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
                 insightRow(.workbuddy)
                 forecastRow(.workbuddy, tint: Theme.workbuddy)
             } else if store.workbuddy != nil {
                 Text("暂无可用的 Credits 资源包")
-                    .font(.system(size: 11))
+                    .font(Token.meta)
                     .foregroundStyle(.secondary)
             } else {
                 emptyContent
             }
         }
+    }
+
+    private var workbuddyCaption: String {
+        guard store.workbuddy?.ok == true, let total = store.workbuddy?.total, total > 0 else {
+            return "等待采集"
+        }
+        return "剩余 / 共 \(Format.credits(total)) credits"
     }
 
     private var codexCard: some View {
@@ -1424,7 +1840,9 @@ struct MenuContent: View {
             icon: "terminal.fill",
             color: Theme.codex,
             plan: Format.plan(store.codex?.plan),
-            error: store.codexError,
+            value: codexValue,
+            valueCaption: codexCaption,
+            status: store.codexError,
             footer: codexFooter,
             links: codexLinks
         ) {
@@ -1440,25 +1858,25 @@ struct MenuContent: View {
                     }
                     if let reset = windows.first?.resetsAt {
                         Text("重置于 \(Format.reset(reset))")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
+                            .font(Token.caption)
+                            .foregroundStyle(.secondary)
                     }
                 } else {
                     Text("当前账号没有限额窗口")
-                        .font(.system(size: 11))
+                        .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Text("Credits")
+                    Text("额外 Credits")
                     Spacer()
                     if let credits = codex.credits, credits.hasCredits {
                         Text(credits.unlimited ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
                     } else {
-                        Text("无额外 Credits")
+                        Text("无")
                     }
                 }
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
                 insightRow(.codex)
                 forecastRow(.codex, tint: Theme.codex)
             } else {
@@ -1467,14 +1885,26 @@ struct MenuContent: View {
         }
     }
 
+    private var codexValue: String {
+        guard store.codex?.ok == true, let window = store.codex?.primaryWindow else { return "--" }
+        return Format.percent(window.remainingPercent)
+    }
+
+    private var codexCaption: String {
+        guard store.codex?.ok == true, let window = store.codex?.primaryWindow else {
+            return "等待采集"
+        }
+        return "\(Format.window(window.windowMinutes))窗口剩余"
+    }
+
     @ViewBuilder
     private func forecastRow(_ provider: UsageProvider, tint: Color) -> some View {
         if let forecast = store.forecast(for: provider) {
             HStack(spacing: 7) {
                 Sparkline(values: forecast.values, tint: tint)
-                    .frame(width: 58, height: 16)
+                    .frame(width: 62, height: 18)
                 Text(forecast.text)
-                    .font(.system(size: 9, weight: forecast.warning ? .semibold : .regular))
+                    .font(.system(size: 10, weight: forecast.warning ? .semibold : .regular))
                     .foregroundStyle(forecast.warning ? Theme.warning : Color.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -1488,9 +1918,9 @@ struct MenuContent: View {
         if let insight = store.insight(for: provider) {
             HStack(spacing: 5) {
                 Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                 Text(insightText(insight))
-                    .font(.system(size: 9))
+                    .font(Token.meta)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -1520,7 +1950,7 @@ struct MenuContent: View {
 
     private var emptyContent: some View {
         Text("暂无数据")
-            .font(.system(size: 11))
+            .font(Token.meta)
             .foregroundStyle(.secondary)
     }
 
@@ -1562,23 +1992,68 @@ struct MenuContent: View {
                 Apps.openURL("https://qoder.com.cn")
             },
         ]
-        if let error = store.qoderError {
-            if error.contains("未登录") {
-                links.append(ProviderLink(
-                    title: "终端登录",
-                    icon: "terminal",
-                    help: "在终端登录 Qoder CLI"
-                ) {
-                    Apps.openTerminal("~/.local/bin/qoderclicn login")
-                })
-            } else if error.contains("未安装") {
-                links.append(ProviderLink(
-                    title: "安装 CLI",
-                    icon: "arrow.down.circle",
-                    help: "查看 Qoder CLI 安装说明"
-                ) {
-                    Apps.openURL("https://docs.qoder.cn/cli/installation")
-                })
+        switch store.qoderSetup {
+        case .installing:
+            links.append(ProviderLink(
+                title: "安装中",
+                icon: "arrow.down.circle",
+                help: "正在下载并执行官方安装脚本，约需 1-2 分钟"
+            ) {})
+        case .preparing:
+            links.append(ProviderLink(
+                title: "准备授权",
+                icon: "link",
+                help: "正在获取登录授权链接"
+            ) {})
+        case .waitingAuth(let url):
+            links.append(ProviderLink(
+                title: "等待授权",
+                icon: "link",
+                help: "在浏览器完成登录后会自动刷新；点击可重新打开授权页"
+            ) {
+                NSWorkspace.shared.open(url)
+            })
+            links.append(ProviderLink(
+                title: "取消",
+                icon: "xmark",
+                help: "取消本次登录"
+            ) {
+                store.cancelQoderSetup()
+            })
+        case .failed(let message):
+            links.append(ProviderLink(
+                title: "重试登录",
+                icon: "arrow.clockwise",
+                help: message
+            ) {
+                store.loginQoderCLI()
+            })
+            links.append(ProviderLink(
+                title: "终端处理",
+                icon: "terminal",
+                help: "授权页无法完成时，在终端手动执行登录：" + message
+            ) {
+                Apps.openTerminal("~/.local/bin/qoderclicn login")
+            })
+        case .idle:
+            if let error = store.qoderError {
+                if error.contains("未登录") {
+                    links.append(ProviderLink(
+                        title: "登录",
+                        icon: "person.crop.circle.badge.questionmark",
+                        help: "在浏览器完成 Qoder CLI 登录"
+                    ) {
+                        store.loginQoderCLI()
+                    })
+                } else if error.contains("未安装") {
+                    links.append(ProviderLink(
+                        title: "安装 CLI",
+                        icon: "arrow.down.circle",
+                        help: "下载并安装官方 Qoder CLI，完成后自动登录"
+                    ) {
+                        store.installQoderCLI()
+                    })
+                }
             }
         }
         return links
@@ -1622,15 +2097,24 @@ struct MenuContent: View {
         ]
     }
 
-    private var menuBarSettings: some View {
-        HStack(spacing: 6) {
-            Text("菜单栏显示")
-                .font(.system(size: 10))
+    private func settingRow<Chips: View>(
+        _ label: String,
+        @ViewBuilder chips: () -> Chips
+    ) -> some View {
+        HStack(spacing: Token.spaceTight) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
+                .frame(width: 62, alignment: .leading)
+            chips()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var menuBarSettings: some View {
+        settingRow("菜单栏") {
             settingChip(
                 "Qoder",
-                color: Theme.qoder,
                 isOn: $store.showQoderInMenuBar,
                 iconOn: "eye.fill",
                 iconOff: "eye.slash",
@@ -1638,7 +2122,6 @@ struct MenuContent: View {
             )
             settingChip(
                 "WorkBuddy",
-                color: Theme.workbuddy,
                 isOn: $store.showWorkBuddyInMenuBar,
                 iconOn: "eye.fill",
                 iconOff: "eye.slash",
@@ -1646,7 +2129,6 @@ struct MenuContent: View {
             )
             settingChip(
                 "Codex",
-                color: Theme.codex,
                 isOn: $store.showCodexInMenuBar,
                 iconOn: "eye.fill",
                 iconOff: "eye.slash",
@@ -1656,66 +2138,36 @@ struct MenuContent: View {
     }
 
     private var reminderSettings: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text("提醒")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                settingChip(
-                    "Qoder 10:00",
-                    color: Theme.qoder,
-                    isOn: $store.remindQoderClaim,
-                    iconOn: "bell.fill",
-                    iconOff: "bell.slash",
-                    help: "每天 10:00 提醒领取 Qoder 100 Credits"
-                )
-                settingChip(
-                    "WorkBuddy 00:00",
-                    color: Theme.workbuddy,
-                    isOn: $store.remindWorkBuddyClaim,
-                    iconOn: "bell.fill",
-                    iconOff: "bell.slash",
-                    help: "每天 00:00 提醒领取 WorkBuddy 100 积分"
-                )
-                settingChip(
-                    "Codex 重置",
-                    color: Theme.codex,
-                    isOn: $store.remindCodexReset,
-                    iconOn: "bell.fill",
-                    iconOff: "bell.slash",
-                    help: "Codex 额度重置时提醒"
-                )
-            }
-            if store.notificationsDenied {
-                HStack(spacing: 4) {
-                    Image(systemName: "bell.slash.fill")
-                        .font(.system(size: 8, weight: .semibold))
-                    Text("系统通知未授权，提醒与预警不会弹出")
-                    Spacer(minLength: 4)
-                    Button("去开启") {
-                        Apps.openURL("x-apple.systempreferences:com.apple.preference.notifications")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Theme.warning)
-                }
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-            }
+        settingRow("提醒") {
+            settingChip(
+                "Qoder",
+                isOn: $store.remindQoderClaim,
+                iconOn: "bell.fill",
+                iconOff: "bell.slash",
+                help: "每天 10:00 提醒领取 Qoder 100 Credits"
+            )
+            settingChip(
+                "WorkBuddy",
+                isOn: $store.remindWorkBuddyClaim,
+                iconOn: "bell.fill",
+                iconOff: "bell.slash",
+                help: "每天 00:00 提醒领取 WorkBuddy 100 积分"
+            )
+            settingChip(
+                "Codex",
+                isOn: $store.remindCodexReset,
+                iconOn: "bell.fill",
+                iconOff: "bell.slash",
+                help: "Codex 额度重置时提醒"
+            )
         }
     }
 
     private var alertSettings: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text("智能预警")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
+        VStack(alignment: .leading, spacing: Token.spaceTight - 1) {
+            settingRow("智能预警") {
                 settingChip(
                     "低额度",
-                    color: Theme.warning,
                     isOn: $store.alertLowBalance,
                     iconOn: "exclamationmark.triangle.fill",
                     iconOff: "exclamationmark.triangle",
@@ -1723,7 +2175,6 @@ struct MenuContent: View {
                 )
                 settingChip(
                     "重置前耗尽",
-                    color: Theme.warning,
                     isOn: $store.alertExhaustion,
                     iconOn: "clock.fill",
                     iconOff: "clock",
@@ -1731,7 +2182,6 @@ struct MenuContent: View {
                 )
                 settingChip(
                     "消耗加速",
-                    color: Theme.warning,
                     isOn: $store.alertAcceleration,
                     iconOn: "bolt.fill",
                     iconOff: "bolt",
@@ -1739,11 +2189,7 @@ struct MenuContent: View {
                 )
             }
             if store.alertLowBalance {
-                HStack(spacing: 5) {
-                    Text("低额度阈值")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    Spacer(minLength: 4)
+                settingRow("低额度阈值") {
                     ForEach([10, 20, 30], id: \.self) { value in
                         thresholdChip(value)
                     }
@@ -1758,17 +2204,18 @@ struct MenuContent: View {
             store.lowBalanceThreshold = value
         }
         .buttonStyle(.plain)
-        .font(.system(size: 9, weight: selected ? .semibold : .regular))
+        .font(.system(size: 10, weight: selected ? .semibold : .regular))
+        .monospacedDigit()
         .foregroundStyle(selected ? Theme.warning : Color.secondary)
         .padding(.horizontal, 8)
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .background(
-            Capsule().fill(selected ? Theme.warning.opacity(0.14) : Color.primary.opacity(0.04))
+            Capsule().fill(selected ? Theme.warning.opacity(0.14) : Token.insetFill)
         )
         .overlay(
             Capsule().stroke(
-                selected ? Theme.warning.opacity(0.28) : Color.primary.opacity(0.08),
-                lineWidth: 0.5
+                selected ? Theme.warning.opacity(0.28) : Token.cardStroke.opacity(0.5),
+                lineWidth: Token.hairline
             )
         )
         .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
@@ -1776,7 +2223,6 @@ struct MenuContent: View {
 
     private func settingChip(
         _ title: String,
-        color: Color,
         isOn: Binding<Bool>,
         iconOn: String,
         iconOff: String,
@@ -1785,23 +2231,27 @@ struct MenuContent: View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Image(systemName: isOn.wrappedValue ? iconOn : iconOff)
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .foregroundStyle(isOn.wrappedValue ? color : Color.secondary)
+            .fixedSize()
+            .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
             .background(
-                Capsule().fill(isOn.wrappedValue ? color.opacity(0.13) : Color.primary.opacity(0.04))
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                    .fill(isOn.wrappedValue ? Color.primary.opacity(0.08) : Color.clear)
             )
             .overlay(
-                Capsule().stroke(
-                    isOn.wrappedValue ? color.opacity(0.25) : Color.primary.opacity(0.08),
-                    lineWidth: 0.5
-                )
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                    .stroke(
+                        Token.cardStroke.opacity(isOn.wrappedValue ? 0.8 : 0.4),
+                        lineWidth: Token.hairline
+                    )
             )
         }
         .buttonStyle(.plain)
@@ -1832,10 +2282,17 @@ struct MenuContent: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("查看随应用附带的 MIT 许可证")
+            if let lastCheckAt = updates.lastCheckAt {
+                Text("·")
+                    .foregroundStyle(.quaternary)
+                Text("检查于 \(Format.ago(lastCheckAt))")
+                    .foregroundStyle(.tertiary)
+                    .help("GitHub Releases 检查节奏为每 24 小时一次，也可点击右侧按钮立即检查")
+            }
             Spacer(minLength: 4)
             updateControl
         }
-        .font(.system(size: 9))
+        .font(Token.meta)
     }
 
     @ViewBuilder
@@ -1859,26 +2316,26 @@ struct MenuContent: View {
             Text("安装包已就绪")
                 .foregroundStyle(.secondary)
         case .upToDate:
-            Button("已是最新") {
-                updates.check()
+            Button("已是最新 · \(Format.time(updates.lastCheckAt))") {
+                updates.checkFromUser()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("重新检查 GitHub Releases")
+            .help("上次检查 \(Format.ago(updates.lastCheckAt))；每 24 小时自动检查一次，点击立即重新检查")
         case .failed(let message):
             Button("重试检查") {
-                updates.check()
+                updates.checkFromUser()
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.warning)
             .help(message)
         case .idle, .available:
             Button("检查更新") {
-                updates.check()
+                updates.checkFromUser()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("从 GitHub Releases 检查新版本")
+            .help("从 GitHub Releases 检查新版本（当前 v\(updates.currentVersion)）")
         }
     }
 
@@ -1938,6 +2395,16 @@ enum Apps {
                 configuration: NSWorkspace.OpenConfiguration()
             )
         }
+    }
+
+    static func confirm(title: String, info: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = info
+        alert.addButton(withTitle: "继续")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     static func openURL(_ string: String) {

@@ -4,21 +4,22 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.2**（build 8） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.3**（build 9） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
 - **菜单栏常驻**：紧凑显示三家的关键指标（Qoder 剩余积分、WorkBuddy 剩余积分、Codex 已用比例），带完整 tooltip。
 - **独立显示开关**：面板底部可分别隐藏 / 显示 Qoder、WorkBuddy、Codex；全部隐藏时仍保留一个 `AI` 入口，点击照常展开面板，数据也继续在后台采集。
-- **自适应面板**：面板高度随屏幕可用区域自动调整；屏幕较小时内容可滚动，不再被裁切。
+- **自适应面板**：面板高度随屏幕可用区域自动调整；屏幕较小时内容可滚动，不再被裁切。三家卡片采用统一的五段布局（图标与名称 / 主数值 / 进度 / 洞察 / 脚注），高度对齐；正文最小字号 10pt，主数值 22pt 等宽数字。
+- **设置折叠**：菜单栏显示、提醒、智能预警与低额度阈值收进右上角齿轮，折叠时仅保留一行快捷栏（最近刷新时间、预警阈值开关、展开入口）。
 - **详情面板**：套餐名称、Credits 进度条、剩余 / 总量、限额窗口、重置时间、最后更新时间与错误状态。
 - **用量洞察**：按本机历史采样估算今日消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗。
-- **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder 未登录 / 未安装时额外提供「终端登录」「安装 CLI」按钮。
+- **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder CLI 未安装时「安装 CLI」一键下载官方安装包并在装好后自动发起登录，未登录时「登录」直接在浏览器完成授权，无需打开终端。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
 - **趋势与耗尽预测**：每 5 分钟记录一次用量快照，展示近 7 天剩余曲线（积分制为剩余 Credits，不受套餐总量变化影响）；Qoder / WorkBuddy 按「净日均消耗」估算额度耗尽时间——剔除每日领取 / 重置带来的增加，领取覆盖消耗时提示「按当前节奏不会耗尽」（历史不足 6 小时先积累样本），Codex 按窗口内消耗速度判断能否撑到重置。
 - **智能预警**：低额度阈值可选 10% / 20% / 30%（默认 20%，持久保存），另有预计重置前耗尽、消耗突然加速两类本地通知，均可独立开关。
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
-- **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动「检查更新」；发现新版本后自动匹配当前芯片下载 DMG 并打开，下载完成时校验 Release 说明中的 SHA-256，拖入「应用程序」即可完成升级。
+- **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动检查；发现新版本后自动匹配当前芯片下载 DMG，下载完成时按 Release 的 `SHA256SUMS` 资产（或说明中的「校验」表）比对 SHA-256，通过后自动打开 DMG，拖入「应用程序」即可完成升级。手动检查后会在面板顶部给出结果提示与上次检查时间，取不到校验值时明确标注「SHA-256 未校验」。
 - **CSV 导出**：面板底部「导出」按钮可将近 14 天用量历史导出为 CSV，便于离线分析。
 - **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
@@ -46,7 +47,9 @@ Q 1,770   W 12,480   C 8.5%
 - **打开**：启动对应客户端（Qoder CN / WorkBuddy / ChatGPT）。
 - **官网**：在浏览器打开官方站点。
 
-底部「菜单栏显示」三个眼睛按钮分别控制菜单栏可见性，状态立即生效并持久保存。
+面板默认只显示三张卡片与一行快捷栏；点右上角齿轮展开设置区，收起时设置不再常驻占位。快捷栏从左到右是最近刷新时间、`预警 30%` 开关（点击切换智能预警的启用状态，标签即当前低额度阈值）与「更多设置」入口。
+
+设置区内「菜单栏显示」三个眼睛按钮分别控制菜单栏可见性，状态立即生效并持久保存。
 
 「提醒」一行的三个铃铛按钮分别控制：
 
@@ -76,18 +79,20 @@ Q 1,770   W 12,480   C 8.5%
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.2` | 当前安装版本 |
+| `v1.4.3` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
-| `检查更新` / `已是最新` / `重试检查` | 手动检查 GitHub Releases；失败时悬停可查看原因 |
+| `已是最新 · HH:mm` / `重试检查` | 手动检查 GitHub Releases；失败时悬停可查看原因 |
+| `检查于 x 前` | 最近一次检查更新的时间（自动与手动共用同一记录） |
 
 ### 版本与更新
 
 - 应用启动后及面板打开时会检查更新，自动检查最多每 24 小时一次；底部按钮可随时手动检查。
 - 优先请求 GitHub Releases API；若 API 被限流或不可用，会自动回退到发布页，不要求登录或 Token。
 - 发现新版本时，面板顶部显示「新版本 x.y.z 可用」，并下载与当前芯片匹配的安装包：arm64 选 `-arm64.dmg`，Intel 选 `-x86_64.dmg`，找不到时使用通用 DMG。
-- 下载完成后校验安装包 SHA-256（与 Release 说明「校验」一节比对，未提供校验值时跳过），通过后自动打开 DMG，将 **TokenTool** 拖入「应用程序」覆盖旧版本即可；应用不会静默替换自身，避免 ad-hoc 签名应用的权限与 Gatekeeper 问题。
+- 安装包地址确定后，额外拉取该 Release 的 `SHA256SUMS` 资产解析校验值（网页回退路径同样可校验）；若该 Release 未提供 `SHA256SUMS`，则退回读取 Release 说明中的「校验」表。下载完成后比对 SHA-256：一致则自动打开 DMG 并标注「SHA-256 已校验」，不一致则删除安装包并提示；两者都取不到时保留安装包，但明确标注「SHA-256 未校验」，不再静默跳过。应用不会静默替换自身，避免 ad-hoc 签名应用的权限与 Gatekeeper 问题。
+- 手动检查后，面板顶部会短暂显示检查结果（「已是最新版本 v x.y.z」或失败原因）与上次检查时间，可点「知道了」立即关闭；已是最新时底部按钮也会显示「已是最新 · HH:mm」。
 - 更新检查遵循系统代理设置；若使用代理访问 GitHub，请确认「系统设置 → 网络 → 代理」已配置。
 - 更新检查只读取版本号与安装包地址，不上传任何账号、额度或使用数据。
 
@@ -110,9 +115,11 @@ Q 1,770   W 12,480   C 8.5%
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.2-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.2-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.2.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.2/TokenTool-1.4.2.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.3-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.3-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.3.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.3/TokenTool-1.4.3.zip) |
+
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.3/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -146,6 +153,14 @@ open build/TokenTool.app
 - `build/TokenTool.app`：用 `lipo` 合并的通用版本
 
 三个应用包均包含图标与采集器，并完成 ad-hoc 签名。
+
+如需产出发布用的安装包与校验文件：
+
+```bash
+./package.sh    # 依赖 ./build.sh 的产物，输出 build/dist
+```
+
+`package.sh` 会为三架构分别生成 DMG 与 ZIP（共六个文件），并在 `build/dist/SHA256SUMS` 中记录每个包的 SHA-256。应用内更新与该文件比对，发布时请一并上传到 Release。
 
 安装到「应用程序」：
 
@@ -220,10 +235,21 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── LICENSE              # MIT 开源许可证
 ├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
 ├── build.sh             # arm64 / x86_64 / 通用版本构建与 ad-hoc 签名
+├── package.sh           # 产出六个安装包与 SHA256SUMS 校验文件
 └── README.md
 ```
 
 ## 版本记录
+
+### 1.4.3
+
+- Qoder CLI 可一键安装：未检测到官方 CLI 时，「安装 CLI」直接下载并执行官方安装脚本，装好后自动发起登录，全程无需打开终端；登录中 / 失败状态在卡片上实时提示，失败可「重试登录」或转终端处理。
+- 详情面板风格重构：三家卡片改为统一的五段布局并对齐高度；正文最小字号提升到 10pt、主数值 22pt 等宽数字；圆角与间距统一为设计令牌；品牌色只用于图标与进度条，错误改为单条状态提示。
+- 菜单栏显示、提醒、智能预警与低额度阈值收进齿轮设置区，折叠时保留一行快捷栏。
+- 趋势曲线补充零基线与「今日」虚线，区域填充更淡；修复积分量级下曲线被 100 上限压平的问题。
+- 更新校验不再静默跳过：安装包地址确定后额外拉取该 Release 的 `SHA256SUMS` 资产，网页回退路径同样可校验；取不到校验值时明确标注「SHA-256 未校验」。
+- 手动检查更新有可见反馈：面板顶部短暂显示检查结果与上次检查时间，底部按钮显示「已是最新 · HH:mm」，并常驻「检查于 x 前」。
+- 新增 `package.sh`：一条命令产出三架构 DMG + ZIP 共六个安装包与 `SHA256SUMS` 校验文件。
 
 ### 1.4.2
 
@@ -299,7 +325,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.2（build 8） |
+| 当前版本 | 1.4.3（build 9） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

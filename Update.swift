@@ -10,9 +10,27 @@ struct UpdateRelease: Equatable {
     }
 
     let version: String
+    let tag: String
     let pageURL: URL
     let notes: String
     let assets: [Asset]
+    let checksums: [String: String]
+
+    init(
+        version: String,
+        tag: String,
+        pageURL: URL,
+        notes: String,
+        assets: [Asset],
+        checksums: [String: String] = [:]
+    ) {
+        self.version = version
+        self.tag = tag
+        self.pageURL = pageURL
+        self.notes = notes
+        self.assets = assets
+        self.checksums = checksums
+    }
 
     static func assets(fromExpandedHTML html: String, tag: String) -> [Asset] {
         let marker = "/releases/download/\(tag)/"
@@ -69,12 +87,31 @@ struct UpdateRelease: Equatable {
     }
 
     func checksum(for assetName: String) -> String? {
+        if let direct = checksums[assetName.lowercased()] {
+            return direct
+        }
         for line in notes.components(separatedBy: .newlines) where line.contains(assetName) {
             if let range = line.range(of: #"[0-9a-fA-F]{64}"#, options: .regularExpression) {
                 return String(line[range]).lowercased()
             }
         }
         return nil
+    }
+
+    static func checksums(fromSHA256SUMS text: String) -> [String: String] {
+        var result: [String: String] = [:]
+        for line in text.components(separatedBy: .newlines) {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 2,
+                  parts[0].count == 64,
+                  parts[0].allSatisfy({ $0.isHexDigit && $0.isASCII }) else { continue }
+            var name = parts[1]
+            if name.hasPrefix("*") { name = name.dropFirst() }
+            let lowered = name.lowercased()
+            guard !lowered.isEmpty else { continue }
+            result[lowered] = parts[0].lowercased()
+        }
+        return result
     }
 }
 
@@ -129,12 +166,14 @@ final class UpdateChecker: ObservableObject {
         case upToDate
         case available(UpdateRelease)
         case downloading(UpdateRelease)
-        case ready(UpdateRelease, URL)
+        case ready(UpdateRelease, URL, verified: Bool)
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var lastError: String?
+    @Published private(set) var lastCheckAt: Date?
+    @Published private(set) var showsResult = false
     let currentVersion: String
 
     private static let lastCheckKey = "updates.lastCheckAt"
@@ -142,9 +181,14 @@ final class UpdateChecker: ObservableObject {
     private static let endpoint = URL(string: "https://api.github.com/repos/pumf/token_tool/releases/latest")!
     private let session: URLSession
     private var didAutoCheck = false
+    private var resultTask: Task<Void, Never>?
 
     init() {
         currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
+        if last > 0 {
+            lastCheckAt = Date(timeIntervalSince1970: last)
+        }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 40
@@ -153,7 +197,7 @@ final class UpdateChecker: ObservableObject {
 
     var pendingRelease: UpdateRelease? {
         switch state {
-        case .available(let release), .downloading(let release), .ready(let release, _):
+        case .available(let release), .downloading(let release), .ready(let release, _, _):
             return release
         default:
             return nil
@@ -193,7 +237,16 @@ final class UpdateChecker: ObservableObject {
         check()
     }
 
-    func check() {
+    func checkFromUser() {
+        check(userInitiated: true)
+    }
+
+    func dismissResult() {
+        resultTask?.cancel()
+        showsResult = false
+    }
+
+    func check(userInitiated: Bool = false) {
         guard !isWorking else { return }
         state = .checking
         lastError = nil
@@ -201,7 +254,9 @@ final class UpdateChecker: ObservableObject {
             guard let self else { return }
             do {
                 let release = try await self.fetchLatest()
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
+                let now = Date()
+                UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.lastCheckKey)
+                self.lastCheckAt = now
                 if UpdateVersion.isNewer(release.version, than: self.currentVersion) {
                     self.state = .available(release)
                 } else {
@@ -212,6 +267,19 @@ final class UpdateChecker: ObservableObject {
                 self.lastError = message
                 self.state = .failed(message)
             }
+            if userInitiated {
+                self.flashResult()
+            }
+        }
+    }
+
+    private func flashResult() {
+        resultTask?.cancel()
+        showsResult = true
+        resultTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.showsResult = false
         }
     }
 
@@ -219,7 +287,7 @@ final class UpdateChecker: ObservableObject {
         switch state {
         case .available(let release):
             download(release)
-        case .ready(_, let url):
+        case .ready(_, let url, _):
             NSWorkspace.shared.open(url)
         default:
             break
@@ -246,14 +314,16 @@ final class UpdateChecker: ObservableObject {
                 try FileManager.default.moveItem(at: temporaryURL, to: destination)
                 let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 guard size > 100_000 else { throw UpdateError.invalidDownload }
+                var verified = false
                 if let expected = release.checksum(for: url.lastPathComponent) {
                     let actual = try UpdateVerification.sha256Hex(of: destination)
                     guard actual == expected else {
                         try? FileManager.default.removeItem(at: destination)
                         throw UpdateError.checksumMismatch
                     }
+                    verified = true
                 }
-                self.state = .ready(release, destination)
+                self.state = .ready(release, destination, verified: verified)
                 NSWorkspace.shared.open(destination)
             } catch {
                 self.lastError = Self.message(for: error)
@@ -263,11 +333,41 @@ final class UpdateChecker: ObservableObject {
     }
 
     private func fetchLatest() async throws -> UpdateRelease {
+        let release: UpdateRelease
         do {
-            return try await fetchLatestFromAPI()
+            release = try await fetchLatestFromAPI()
         } catch {
-            return try await fetchLatestFromWeb()
+            release = try await fetchLatestFromWeb()
         }
+        guard release.checksums.isEmpty else { return release }
+        let checksums = await fetchChecksums(tag: release.tag)
+        guard !checksums.isEmpty else { return release }
+        return UpdateRelease(
+            version: release.version,
+            tag: release.tag,
+            pageURL: release.pageURL,
+            notes: release.notes,
+            assets: release.assets,
+            checksums: checksums
+        )
+    }
+
+    private func fetchChecksums(tag: String) async -> [String: String] {
+        let encodedTag = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tag
+        guard let url = URL(string: Self.repository + "/releases/download/\(encodedTag)/SHA256SUMS") else {
+            return [:]
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("TokenTool/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              let text = String(data: data, encoding: .utf8) else {
+            return [:]
+        }
+        return UpdateRelease.checksums(fromSHA256SUMS: text)
     }
 
     private func fetchLatestFromAPI() async throws -> UpdateRelease {
@@ -295,6 +395,7 @@ final class UpdateChecker: ObservableObject {
         guard !version.isEmpty else { throw UpdateError.badResponse }
         return UpdateRelease(
             version: version,
+            tag: payload.tagName,
             pageURL: pageURL,
             notes: payload.body ?? "",
             assets: assets
@@ -322,7 +423,15 @@ final class UpdateChecker: ObservableObject {
 
         let assets = (try? await fetchAssetsFromWeb(tag: tag))
             ?? UpdateRelease.conventionalAssets(version: version, tag: tag)
-        return UpdateRelease(version: version, pageURL: pageURL, notes: "", assets: assets)
+        let checksums = await fetchChecksums(tag: tag)
+        return UpdateRelease(
+            version: version,
+            tag: tag,
+            pageURL: pageURL,
+            notes: "",
+            assets: assets,
+            checksums: checksums
+        )
     }
 
     private func fetchAssetsFromWeb(tag: String) async throws -> [UpdateRelease.Asset] {

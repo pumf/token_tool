@@ -595,6 +595,177 @@ def collect_qoder() -> dict:
             qoder_kill(pid, fd)
 
 
+# ------------------------------------------------- Qoder bootstrap actions
+
+QODER_INSTALL_URL = "https://static.qoder.com.cn/qoder-cli-cn/install.sh"
+QODER_LOGIN_STATE = APP_SUPPORT / "qoder-login.json"
+URL_RE = re.compile(r"https?://[^\s\x07\x1b\"'<>]+")
+
+
+def _redact_urls(text):
+    return URL_RE.sub("<url>", text)
+
+
+def _login_state_read():
+    try:
+        data = json.loads(QODER_LOGIN_STATE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _login_state_write(**fields):
+    state = _login_state_read()
+    state.update(fields)
+    state["updatedAt"] = int(time.time())
+    try:
+        APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+        QODER_LOGIN_STATE.write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+    return state
+
+
+def qoder_install():
+    existing = qoder_cli()
+    if existing:
+        return {"ok": True, "status": "already", "cli": existing}
+    env = dict(os.environ)
+    env["PATH"] = qoder_cli_search_path()
+    command = f"curl -fsSL {QODER_INSTALL_URL} | bash"
+    try:
+        proc = subprocess.run(
+            ["/bin/zsh", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return fail("Qoder CLI 安装超时，请在终端手动执行安装命令")
+    except Exception as exc:
+        return fail(exc)
+    installed = qoder_cli()
+    if installed:
+        return {"ok": True, "status": "installed", "cli": installed}
+    tail = _redact_urls(strip_ansi((proc.stdout or "") + "\n" + (proc.stderr or "")))
+    return fail("安装脚本已执行但未找到 qoderclicn（退出码 %d）：%s" % (proc.returncode, tail[-300:]))
+
+
+def _qoder_login_daemon(cli):
+    pid = fd = None
+    output = ""
+    url = None
+    status = "failed"
+    message = "登录进程异常退出"
+    try:
+        pid, fd = pty.fork()
+        if pid == 0:
+            try:
+                os.chdir(str(APP_SUPPORT))
+                os.execvpe(cli, [cli, "login"], qoder_env())
+            finally:
+                os._exit(127)
+        deadline = time.time() + 300
+        exit_code = None
+        while time.time() < deadline:
+            ready, _, _ = select.select([fd], [], [], 1.0)
+            if ready:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    output += chunk.decode("utf-8", "replace")
+                    if url is None:
+                        match = URL_RE.search(strip_ansi(output))
+                        if match:
+                            url = match.group(0).rstrip(".,)]}、。")
+                            _login_state_write(status="waiting", url=url)
+                    continue
+            try:
+                done, raw_status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                done, raw_status = pid, 0
+            if done == pid:
+                exit_code = os.waitstatus_to_exitcode(raw_status) if hasattr(os, "waitstatus_to_exitcode") else (raw_status >> 8)
+                pid = None
+                break
+        compact = re.sub(r"\s+", "", strip_ansi(output)).lower()
+        if url is None:
+            message = "登录进程未输出授权链接：" + _redact_urls(strip_ansi(output))[-200:]
+        elif exit_code == 0 or "loginsuccess" in compact or "登录成功" in strip_ansi(output):
+            status = "done"
+            message = None
+        elif exit_code is None:
+            message = "登录等待超时，请重新发起登录"
+        else:
+            message = "登录未完成（退出码 %s）" % exit_code
+    except Exception as exc:
+        message = str(exc)[:200]
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if pid:
+            qoder_kill(pid, None)
+        _login_state_write(status=status, message=message, url=None)
+
+
+def qoder_login_start():
+    cli = qoder_cli()
+    if not cli:
+        return fail(qoder_cli_missing_message())
+    _login_state_write(status="starting", url=None, message=None)
+    try:
+        APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+        pid = os.fork()
+    except Exception as exc:
+        return fail("无法启动登录进程：" + str(exc)[:120])
+    if pid == 0:
+        try:
+            os.setsid()
+            if os.fork() == 0:
+                _qoder_login_daemon(cli)
+                os._exit(0)
+        except Exception:
+            os._exit(1)
+        os._exit(0)
+    try:
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        state = _login_state_read()
+        if state.get("url") or state.get("status") in ("done", "failed"):
+            break
+        time.sleep(0.3)
+    state = _login_state_read()
+    if state.get("status") == "failed":
+        return fail(state.get("message") or "登录启动失败")
+    if not state.get("url"):
+        return fail("未获取到授权链接，请稍后重试")
+    return {"ok": True, "status": "waiting", "url": state["url"]}
+
+
+def qoder_login_status():
+    state = _login_state_read()
+    status = state.get("status") or "idle"
+    if status == "waiting" and time.time() - int(state.get("updatedAt") or 0) > 330:
+        status = "failed"
+    return {
+        "ok": True,
+        "status": status,
+        "url": state.get("url"),
+        "message": state.get("message"),
+    }
+
+
 # ---------------------------------------------------------------- main
 
 def collect(provider):
@@ -609,10 +780,28 @@ def collect(provider):
         return fail(exc)
 
 
+QODER_ACTIONS = {
+    "qoder-install": qoder_install,
+    "qoder-login": qoder_login_start,
+    "qoder-login-status": qoder_login_status,
+}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--provider", default="all", choices=["all", "fast", "codex", "workbuddy", "qoder"])
+    parser.add_argument("--action", default=None, choices=sorted(QODER_ACTIONS))
     args = parser.parse_args()
+    if args.action:
+        try:
+            payload = QODER_ACTIONS[args.action]()
+        except Exception as exc:
+            payload = fail(exc)
+        print(json.dumps(
+            {"version": 1, "updatedAt": int(time.time()), "action": args.action, "result": payload},
+            ensure_ascii=False,
+        ))
+        return
     providers = []
     if args.provider in ("all", "fast", "codex"):
         providers.append("codex")
