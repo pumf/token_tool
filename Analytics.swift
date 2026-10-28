@@ -78,6 +78,8 @@ enum UsageAnalytics {
     static let historyRetentionDays = 14
     static let chartDays = 7
     static let sampleInterval: TimeInterval = 300
+    /// Qoder 走 CLI 采集（单次约 5 秒），间隔比本地 IPC 的两家长，但不能长到领取后要等几分钟才刷新。
+    static let qoderRefreshInterval: TimeInterval = 90
     static let maxSamplesPerProvider = 4500
     static let defaultLowThreshold = 20.0
     static let lowRecoveryGap = 5.0

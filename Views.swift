@@ -637,7 +637,7 @@ final class UsageStore: ObservableObject {
         ), now >= claimAt else { return nil }
         let key = "attention.claim.dismiss.\(provider.rawValue)"
         if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
-        guard !receivedClaimToday(provider: provider, now: now) else { return nil }
+        guard !receivedClaimToday(provider: provider, input: input, now: now) else { return nil }
         return AttentionItem(
             id: "claim.\(provider.rawValue)",
             provider: provider,
@@ -653,15 +653,29 @@ final class UsageStore: ObservableObject {
     /// 今天是否已经领到过量：领取会把剩余与总量同时抬高，消耗只让剩余下降，
     /// 资源包过期则让总量下降，因此「任一相邻样本出现增加」就是已领取的可靠信号。
     /// 判定从当天 00:00 起算而不是从领取时点起算，提前或延后领取都不会误报。
-    private func receivedClaimToday(provider: UsageProvider, now: Date) -> Bool {
+    /// 历史是 5 分钟一个采样点，所以还要把最新一次采集值当作相邻点再比一次。
+    private func receivedClaimToday(
+        provider: UsageProvider,
+        input: UsageInput,
+        now: Date
+    ) -> Bool {
         let dayStart = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
         let samples = history(for: provider).sorted { $0.at < $1.at }
-        guard var baseline = samples.last(where: { $0.at < dayStart }) else { return false }
+        guard var baseline = samples.last(where: { $0.at < dayStart }) ?? samples.first else { return false }
         for sample in samples where sample.at >= dayStart {
             if Self.grew(from: baseline, to: sample) { return true }
             baseline = sample
         }
-        return false
+        return Self.grew(
+            from: baseline,
+            to: UsageSample(
+                at: 0,
+                remaining: input.remaining,
+                total: input.total,
+                remainingPercent: nil,
+                windows: nil
+            )
+        )
     }
 
     private static func grew(from previous: UsageSample, to current: UsageSample) -> Bool {
@@ -1262,11 +1276,19 @@ final class UsageStore: ObservableObject {
         RunLoop.main.add(fast, forMode: .common)
         fastTimer = fast
 
-        let qoder = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
+        let qoder = Timer(timeInterval: UsageAnalytics.qoderRefreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshQoder() }
         }
         RunLoop.main.add(qoder, forMode: .common)
         qoderTimer = qoder
+    }
+
+    /// 面板展开时补一次 Qoder 采集：领取、消耗都要等下一个定时周期才反映太慢。
+    /// 采集耗时约 5 秒且异步进行，面板先显示缓存值，回来后自动就地更新。
+    func refreshQoderIfStale() {
+        guard let at = lastQoderAt,
+              Date().timeIntervalSince(at) >= UsageAnalytics.qoderRefreshInterval else { return }
+        refreshQoder()
     }
 
     private func loadCache() {

@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.7**（build 13） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.8**（build 14） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -23,7 +23,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动检查；发现新版本后自动匹配当前芯片下载 DMG，下载完成时按 Release 的 `SHA256SUMS` 资产（或说明中的「校验」表）比对 SHA-256，通过后自动打开 DMG，拖入「应用程序」即可完成升级。手动检查后会在面板顶部给出结果提示与上次检查时间，取不到校验值时明确标注「SHA-256 未校验」。
 - **CSV 导出**：面板底部「导出」按钮可将近 14 天用量历史导出为 CSV，便于离线分析。
 - **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
-- **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 5 分钟；支持手动刷新，系统唤醒后自动刷新一次。
+- **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 90 秒（CLI 采集单次约 5 秒）；展开面板时若 Qoder 数据已超过 90 秒会立刻补采一次，先显示缓存值、采集回来就地更新。另支持手动刷新与系统唤醒后自动刷新。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
 - **开机启动**：面板一键开关，通过 LaunchAgent 实现，不产生 Dock 图标。
 - **原生安装包**：分别提供 Apple Silicon（arm64）与 Intel（x86_64）安装包，另附通用二进制，最低 macOS 12。
@@ -59,7 +59,7 @@ Q 1,770   W 12,480   C 8.5%
 
 面板默认只显示三张卡片与一行快捷栏；点右上角齿轮展开设置区，收起时设置不再常驻占位。快捷栏从左到右是最近刷新时间、`预警 30%` 开关（点击切换智能预警的启用状态，标签即当前低额度阈值）与「更多设置」入口。
 
-有需要注意的事情时，标题下方会出现一条「关注摘要」：告警项在前、待领取项在后，每条写明平台、原因与时刻（例如「WorkBuddy 剩余 4%」「Codex 周窗口预计 3.2 小时后耗尽」「Qoder 今日 100 Credits 待领取」），右侧一键打开对应客户端。待领取项在检测到**今天**剩余额度或套餐总量出现过增加（即领取到账）后自动消失，从当天 00:00 起判定，提前或延后领取都不会误报；也可点「今天不再提醒」按天忽略（次日恢复）。点「静音 30 分钟」可临时收起摘要与菜单栏高亮，标题下方会留下「静音中，HH:mm 自动恢复提醒」与「取消静音」。
+有需要注意的事情时，标题下方会出现一条「关注摘要」：告警项在前、待领取项在后，每条写明平台、原因与时刻（例如「WorkBuddy 剩余 4%」「Codex 周窗口预计 3.2 小时后耗尽」「Qoder 今日 100 Credits 待领取」），右侧一键打开对应客户端。待领取项在检测到**今天**剩余额度或套餐总量出现过增加（即领取到账）后自动消失，从当天 00:00 起判定，提前或延后领取都不会误报；判定会直接比对最新一次采集值，所以领取后最多 90 秒提示就会收起，不必等 5 分钟的历史采样点。也可点「今天不再提醒」按天忽略（次日恢复）。点「静音 30 分钟」可临时收起摘要与菜单栏高亮，标题下方会留下「静音中，HH:mm 自动恢复提醒」与「取消静音」。
 
 设置区内「菜单栏显示」三个眼睛按钮分别控制菜单栏可见性，状态立即生效并持久保存。
 
@@ -95,7 +95,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.7` | 当前安装版本 |
+| `v1.4.8` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -131,11 +131,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.7-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.7-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.7.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.7/TokenTool-1.4.7.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.8-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.8-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.8.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.7/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.8/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -256,6 +256,13 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.4.8
+
+- Qoder 自动刷新从 5 分钟缩短到 90 秒（单次 CLI 采集实测约 5 秒，原先的间隔过于保守），领取或消耗后不必再等几分钟才反映到面板。
+- 展开面板时若 Qoder 数据已超过 90 秒会立刻补采一次：先显示缓存值，采集回来就地更新，不用手动点刷新。
+- 「今日额度待领取」的判定直接比对最新一次采集值，不再等下一个历史采样点，领取后提示最多 90 秒收起；全新安装没有跨日基线时用当天首个样本兜底。
+- 历史采样仍保持 5 分钟一个点，避免刷新变密后把 14 天的样本上限撑满、把曲线压短。
 
 ### 1.4.7
 

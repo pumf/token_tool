@@ -169,6 +169,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         updateTitle()
         updateContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        store.refreshQoderIfStale()
     }
 
     func popoverDidClose(_ notification: Notification) {
