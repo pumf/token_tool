@@ -631,16 +631,13 @@ final class UsageStore: ObservableObject {
         now: Date
     ) -> AttentionItem? {
         guard enabled else { return nil }
-        guard let remaining = input.remaining,
-              let total = input.total,
-              total > 0,
-              remaining < total - 0.5 else { return nil }
+        guard input.remaining != nil, let total = input.total, total > 0 else { return nil }
         guard let claimAt = Calendar.current.date(
             bySettingHour: claimHour, minute: 0, second: 0, of: now
         ), now >= claimAt else { return nil }
         let key = "attention.claim.dismiss.\(provider.rawValue)"
         if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
-        guard !receivedClaimSince(provider: provider, since: claimAt, now: now) else { return nil }
+        guard !receivedClaimToday(provider: provider, now: now) else { return nil }
         return AttentionItem(
             id: "claim.\(provider.rawValue)",
             provider: provider,
@@ -653,24 +650,23 @@ final class UsageStore: ObservableObject {
         )
     }
 
-    private func receivedClaimSince(provider: UsageProvider, since: Date, now: Date) -> Bool {
-        let sinceTs = Int(since.timeIntervalSince1970)
-        let nowTs = Int(now.timeIntervalSince1970)
-        let samples = history(for: provider)
-        let today = samples.filter { $0.at >= sinceTs && $0.at <= nowTs }
-        if let baseline = samples.last(where: { $0.at < sinceTs })?.remaining,
-           let latest = today.last?.remaining,
-           latest > baseline + 0.5 {
-            return true
+    /// 今天是否已经领到过量：领取会把剩余与总量同时抬高，消耗只让剩余下降，
+    /// 资源包过期则让总量下降，因此「任一相邻样本出现增加」就是已领取的可靠信号。
+    /// 判定从当天 00:00 起算而不是从领取时点起算，提前或延后领取都不会误报。
+    private func receivedClaimToday(provider: UsageProvider, now: Date) -> Bool {
+        let dayStart = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
+        let samples = history(for: provider).sorted { $0.at < $1.at }
+        guard var baseline = samples.last(where: { $0.at < dayStart }) else { return false }
+        for sample in samples where sample.at >= dayStart {
+            if Self.grew(from: baseline, to: sample) { return true }
+            baseline = sample
         }
-        guard today.count >= 2 else { return false }
-        for index in 1..<today.count {
-            if let previous = today[index - 1].remaining,
-               let current = today[index].remaining,
-               current > previous + 0.5 {
-                return true
-            }
-        }
+        return false
+    }
+
+    private static func grew(from previous: UsageSample, to current: UsageSample) -> Bool {
+        if let value = previous.remaining, let next = current.remaining, next > value + 0.5 { return true }
+        if let value = previous.total, let next = current.total, next > value + 0.5 { return true }
         return false
     }
 
