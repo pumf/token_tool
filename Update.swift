@@ -264,6 +264,7 @@ final class UpdateChecker: ObservableObject {
                 }
             } catch {
                 let message = Self.message(for: error)
+                Diagnostics.record("update", "检查更新失败：\(message)")
                 self.lastError = message
                 self.state = .failed(message)
             }
@@ -323,9 +324,16 @@ final class UpdateChecker: ObservableObject {
                     }
                     verified = true
                 }
+                Diagnostics.record(
+                    "update",
+                    verified
+                        ? "已下载并通过 SHA-256 校验：\(url.lastPathComponent)"
+                        : "已下载但没有校验值：\(url.lastPathComponent)"
+                )
                 self.state = .ready(release, destination, verified: verified)
                 NSWorkspace.shared.open(destination)
             } catch {
+                Diagnostics.record("update", "下载更新失败：\(Self.message(for: error))")
                 self.lastError = Self.message(for: error)
                 self.state = .available(release)
             }

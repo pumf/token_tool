@@ -4,17 +4,48 @@ import Combine
 import Darwin
 @preconcurrency import UserNotifications
 
+/// 采集器字段全部按可选解码：上游改字段名或删字段时，这一家降级成「部分未知」，
+/// 不会让整份 JSON 解码失败、把另外两家一起打回「无法解析」。
 struct CodexWindow: Codable, Sendable, Identifiable {
     let id: String
-    let windowMinutes: Int
-    let usedPercent: Double
-    let remainingPercent: Double
+    let windowMinutes: Int?
+    let usedPercent: Double?
+    let remainingPercent: Double?
     let resetsAt: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, windowMinutes, usedPercent, remainingPercent, resetsAt
+    }
+
+    init(
+        id: String,
+        windowMinutes: Int?,
+        usedPercent: Double?,
+        remainingPercent: Double?,
+        resetsAt: Int?
+    ) {
+        self.id = id
+        self.windowMinutes = windowMinutes
+        self.usedPercent = usedPercent
+        self.remainingPercent = remainingPercent
+        self.resetsAt = resetsAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let minutes = (try? container.decode(Int.self, forKey: .windowMinutes)) ?? nil
+        let percent = (try? container.decode(Double.self, forKey: .usedPercent)) ?? nil
+        id = (try? container.decode(String.self, forKey: .id)) ?? "window-\(minutes ?? 0)"
+        windowMinutes = minutes
+        usedPercent = percent
+        remainingPercent = (try? container.decode(Double.self, forKey: .remainingPercent)) ?? nil
+        resetsAt = (try? container.decode(Int.self, forKey: .resetsAt)) ?? nil
+    }
 }
 
 struct CodexCredits: Codable, Sendable {
-    let hasCredits: Bool
-    let unlimited: Bool
+    let hasCredits: Bool?
+    let unlimited: Bool?
     let balance: Double?
 }
 
@@ -48,12 +79,91 @@ struct ProviderResult: Codable, Sendable {
     }
 
     var primaryWindow: CodexWindow? { windows?.first }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, error, updatedAt, plan, accountType, windows, credits, resetCredits
+        case total, remaining, used, usedPercent, remainingPercent, packages, unit
+        case planExpiresAt, planUsed, planTotal, addonUsed, addonTotal
+        case orgResourcePackage, source
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = container.loose(Bool.self, .ok)
+        error = container.loose(String.self, .error)
+        updatedAt = container.loose(Int.self, .updatedAt)
+        plan = container.loose(String.self, .plan)
+        accountType = container.loose(String.self, .accountType)
+        windows = container.loose([CodexWindow].self, .windows)
+        credits = container.loose(CodexCredits.self, .credits)
+        resetCredits = container.loose(Int.self, .resetCredits)
+        total = container.loose(Double.self, .total)
+        remaining = container.loose(Double.self, .remaining)
+        used = container.loose(Double.self, .used)
+        usedPercent = container.loose(Double.self, .usedPercent)
+        remainingPercent = container.loose(Double.self, .remainingPercent)
+        packages = container.loose(Int.self, .packages)
+        unit = container.loose(String.self, .unit)
+        planExpiresAt = container.loose(String.self, .planExpiresAt)
+        planUsed = container.loose(Double.self, .planUsed)
+        planTotal = container.loose(Double.self, .planTotal)
+        addonUsed = container.loose(Double.self, .addonUsed)
+        addonTotal = container.loose(Double.self, .addonTotal)
+        orgResourcePackage = container.loose(String.self, .orgResourcePackage)
+        source = container.loose(String.self, .source)
+    }
+}
+
+private struct DynamicCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}
+
+extension KeyedDecodingContainer {
+    /// 字段级宽容解码：类型不符就当没有，而不是让整个对象解码失败。
+    func loose<T: Decodable>(_ type: T.Type, _ key: Key) -> T? {
+        (try? decodeIfPresent(type, forKey: key)) ?? nil
+    }
 }
 
 struct CollectorOutput: Decodable, Sendable {
     let version: Int?
     let updatedAt: Int?
     let providers: [String: ProviderResult]?
+    /// 解码失败或版本不符的 provider，键为采集器里的名字，值为可直接展示的中文原因。
+    let providerErrors: [String: String]
+
+    private enum CodingKeys: String, CodingKey {
+        case version, updatedAt, providers
+    }
+
+    static let supportedVersion = 1
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = container.loose(Int.self, .version)
+        updatedAt = container.loose(Int.self, .updatedAt)
+        var parsed: [String: ProviderResult] = [:]
+        var failures: [String: String] = [:]
+        if version != nil, version != Self.supportedVersion {
+            failures["all"] = "采集器输出版本 \(version!) 与当前应用不匹配"
+        }
+        if let nested = try? container.nestedContainer(keyedBy: DynamicCodingKey.self, forKey: .providers) {
+            for key in nested.allKeys {
+                if let result = try? nested.decode(ProviderResult.self, forKey: key) {
+                    parsed[key.stringValue] = result
+                } else {
+                    failures[key.stringValue] = "该平台的返回结构已变化，请升级应用"
+                }
+            }
+        } else if container.contains(.providers) {
+            failures["all"] = "采集器返回的 providers 不是对象"
+        }
+        providers = parsed.isEmpty ? nil : parsed
+        providerErrors = failures
+    }
 }
 
 struct CollectorAction: Decodable, Sendable {
@@ -138,15 +248,26 @@ enum CollectorRunner {
             return .failure("采集器文件缺失")
         }
         let directory = FileManager.default.temporaryDirectory
-        let outputURL = directory.appendingPathComponent("tokentool-\(UUID().uuidString).out")
-        let errorURL = directory.appendingPathComponent("tokentool-\(UUID().uuidString).err")
+        let tag = UUID().uuidString
+        let outputURL = directory.appendingPathComponent("tokentool-\(tag).out")
+        let errorURL = directory.appendingPathComponent("tokentool-\(tag).err")
         FileManager.default.createFile(atPath: outputURL.path, contents: nil)
         FileManager.default.createFile(atPath: errorURL.path, contents: nil)
+        let process = Process()
+        var didLaunch = false
+        guard let outputHandle = try? FileHandle(forWritingTo: outputURL),
+              let errorHandle = try? FileHandle(forWritingTo: errorURL) else {
+            return .failure("无法创建采集器输出文件")
+        }
         defer {
+            // 无论走哪条返回路径都要关句柄、回收子进程、删临时文件；
+            // 旧实现在超时分支直接 return，每次超时都留下一个僵尸进程和两个未关闭的 fd。
+            try? outputHandle.close()
+            try? errorHandle.close()
+            if didLaunch { reap(process) }
             try? FileManager.default.removeItem(at: outputURL)
             try? FileManager.default.removeItem(at: errorURL)
         }
-        let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", script.path] + arguments
         var environment = ProcessInfo.processInfo.environment
@@ -154,36 +275,74 @@ enum CollectorRunner {
         environment["PATH"] = extraPath + ":" + (environment["PATH"] ?? "")
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
-        guard let outputHandle = try? FileHandle(forWritingTo: outputURL),
-              let errorHandle = try? FileHandle(forWritingTo: errorURL) else {
-            return .failure("无法创建采集器输出文件")
-        }
         process.standardOutput = outputHandle
         process.standardError = errorHandle
         do {
             try process.run()
+            didLaunch = true
         } catch {
-            return .failure("无法启动采集器")
+            return .failure("无法启动采集器：\(error.localizedDescription)")
         }
 
         let deadline = Date().addingTimeInterval(timeout)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
         }
+        let timedOut = process.isRunning
+        if didLaunch { reap(process) }
+        let stderr = readTail(of: errorURL, bytes: 600)
+        if timedOut {
+            return .failure(classify(timeout: timeout, stderr: stderr))
+        }
+        guard let data = try? Data(contentsOf: outputURL), !data.isEmpty else {
+            return .failure(classify(status: process.terminationStatus, stderr: stderr))
+        }
+        if process.terminationStatus != 0, !stderr.isEmpty {
+            Diagnostics.record("collector", "退出码 \(process.terminationStatus)：\(stderr)")
+        }
+        return .success(data)
+    }
+
+    /// 先 TERM、再 KILL，最后 waitUntilExit 收尸；重复调用安全。
+    private static func reap(_ process: Process) {
         if process.isRunning {
             process.terminate()
             Thread.sleep(forTimeInterval: 0.3)
             if process.isRunning {
                 Darwin.kill(process.processIdentifier, SIGKILL)
             }
-            return .failure("采集超时")
         }
-        outputHandle.closeFile()
-        errorHandle.closeFile()
-        guard let data = try? Data(contentsOf: outputURL), !data.isEmpty else {
-            return .failure("采集器没有返回数据")
+        process.waitUntilExit()
+    }
+
+    private static func readTail(of url: URL, bytes: Int) -> String {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return "" }
+        let tail = data.suffix(bytes)
+        return String(decoding: tail, as: UTF8.self)
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .suffix(3)
+            .joined(separator: " / ")
+    }
+
+    /// 把「python3 不存在」「需要命令行工具」这类环境问题说清楚，而不是统一报采集超时。
+    private static func classify(timeout: TimeInterval, stderr: String) -> String {
+        let reason = stderr.isEmpty ? "" : "（\(stderr)）"
+        return "采集超时 \(Int(timeout)) 秒\(reason)"
+    }
+
+    private static func classify(status: Int32, stderr: String) -> String {
+        if stderr.contains("python3") && stderr.contains("No such file") {
+            return "本机没有 python3，请安装 Xcode 命令行工具（xcode-select --install）后重试"
         }
-        return .success(data)
+        if stderr.contains("xcode-select") {
+            return "需要先安装 Xcode 命令行工具才能采集（xcode-select --install）"
+        }
+        if status == 127 {
+            return "找不到 python3，请安装 Xcode 命令行工具后重试"
+        }
+        let reason = stderr.isEmpty ? "" : "：\(stderr)"
+        return "采集器没有输出任何数据（退出码 \(status)\(reason)）"
     }
 }
 
@@ -374,7 +533,13 @@ final class UsageStore: ObservableObject {
             .appendingPathComponent("TokenTool/history.json")
     }
 
-    private enum Provider { case codex, workbuddy, qoder }
+    /// 每次写入前轮换出来的上一份历史，主文件损坏时用它回退。
+    private static var historyBackupURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TokenTool/history.json.bak")
+    }
+
+    private enum Provider: Sendable { case codex, workbuddy, qoder }
     private var fastTimer: Timer?
     private var qoderTimer: Timer?
 
@@ -684,54 +849,124 @@ final class UsageStore: ObservableObject {
         return false
     }
 
-    func refreshAll() {
-        refreshFast()
-        refreshQoder()
+    /// 一次采集目标的名称、界面标题、超时预算与失败退避基准。
+    private struct CollectionTarget: Sendable {
+        let name: String
+        let title: String
+        let provider: Provider
+        let timeout: TimeInterval
+        let baseInterval: TimeInterval
     }
 
-    func refreshFast() {
+    /// Codex 需要等本机 app-server 应答，WorkBuddy 走本机 socket，两者分开采集、各给各的预算：
+    /// 以前共用一次 80 秒预算，Codex 挂死会把已经采好的 WorkBuddy 数据一起超时掉。
+    private static let fastTargets: [CollectionTarget] = [
+        CollectionTarget(name: "codex", title: "Codex", provider: .codex, timeout: 70, baseInterval: 60),
+        CollectionTarget(name: "workbuddy", title: "WorkBuddy", provider: .workbuddy, timeout: 25, baseInterval: 60),
+    ]
+
+    private static let qoderTarget = CollectionTarget(
+        name: "qoder",
+        title: "Qoder",
+        provider: .qoder,
+        timeout: 80,
+        baseInterval: UsageAnalytics.qoderRefreshInterval
+    )
+
+    /// 环境类失败（超时、python3 缺失、输出不可解析）按指数退避，避免每 60 秒反复重开子进程。
+    private var collectorFailures: [String: Int] = [:]
+    private var collectorRetryAt: [String: Date] = [:]
+
+    private func canCollect(_ name: String) -> Bool {
+        guard let at = collectorRetryAt[name] else { return true }
+        return Date() >= at
+    }
+
+    private func registerFailure(_ target: CollectionTarget, message: String) {
+        let failures = (collectorFailures[target.name] ?? 0) + 1
+        collectorFailures[target.name] = failures
+        let interval = min(target.baseInterval * pow(2, Double(min(failures - 1, 4))), 900)
+        collectorRetryAt[target.name] = Date().addingTimeInterval(interval)
+        Diagnostics.record(
+            "collector",
+            "\(target.name) 连续 \(failures) 次采集失败，\(Int(interval)) 秒后重试：\(message)"
+        )
+    }
+
+    private func resetFailures(_ target: CollectionTarget) {
+        guard collectorFailures[target.name] != nil else { return }
+        Diagnostics.record("collector", "\(target.name) 采集恢复")
+        collectorFailures[target.name] = nil
+        collectorRetryAt[target.name] = nil
+    }
+
+    private func setError(_ message: String, for provider: Provider) {
+        switch provider {
+        case .codex: codexError = message
+        case .workbuddy: workbuddyError = message
+        case .qoder: qoderError = message
+        }
+    }
+
+    private func consume(_ run: CollectorRunner.RunResult, from target: CollectionTarget) {
+        guard let output = run.output else {
+            let message = run.error ?? "采集器运行失败"
+            registerFailure(target, message: message)
+            setError(message, for: target.provider)
+            return
+        }
+        resetFailures(target)
+        if let fatal = output.providerErrors["all"] {
+            setError(fatal, for: target.provider)
+            Diagnostics.record("collector", "\(target.name)：\(fatal)")
+            return
+        }
+        guard let result = output.providers?[target.name] else {
+            let message = output.providerErrors[target.name] ?? "采集器未返回 \(target.title) 数据"
+            setError(message, for: target.provider)
+            Diagnostics.record("collector", "\(target.name)：\(message)")
+            return
+        }
+        apply(result, to: target.provider)
+    }
+
+    /// 手动刷新与唤醒都强制采集一次，忽略退避窗口。
+    func refreshAll() {
+        refreshFast(force: true)
+        refreshQoder(force: true)
+    }
+
+    func refreshFast(force: Bool = false) {
         guard !fastRefreshing else { return }
+        let targets = Self.fastTargets.filter { force || canCollect($0.name) }
+        guard !targets.isEmpty else { return }
         fastRefreshing = true
         Task.detached(priority: .utility) { [weak self] in
-            let run = CollectorRunner.run(provider: "fast")
-            guard let self else { return }
+            guard let store = self else { return }
+            // 逐个采集、采完立刻回主线程更新：慢的一家（Codex 最多等 70 秒）不会压着
+            // 已经采好的一家让面板等到最后才刷新。
+            for target in targets {
+                let run = CollectorRunner.run(provider: target.name, timeout: target.timeout)
+                await MainActor.run { store.consume(run, from: target) }
+            }
             await MainActor.run {
-                if let output = run.output {
-                    if let result = output.providers?["codex"] {
-                        self.apply(result, to: .codex)
-                    } else {
-                        self.codexError = "采集器未返回 Codex 数据"
-                    }
-                    if let result = output.providers?["workbuddy"] {
-                        self.apply(result, to: .workbuddy)
-                    } else {
-                        self.workbuddyError = "采集器未返回 WorkBuddy 数据"
-                    }
-                } else {
-                    let message = run.error ?? "采集器运行失败"
-                    self.codexError = message
-                    self.workbuddyError = message
-                }
-                self.lastFastAt = Date()
-                self.fastRefreshing = false
-                self.saveCache()
-                self.recomputeAttention(now: Date())
+                store.lastFastAt = Date()
+                store.fastRefreshing = false
+                store.saveCache()
+                store.recomputeAttention(now: Date())
             }
         }
     }
 
-    func refreshQoder() {
-        guard !qoderRefreshing else { return }
+    func refreshQoder(force: Bool = false) {
+        guard !qoderRefreshing, force || canCollect(Self.qoderTarget.name) else { return }
         qoderRefreshing = true
+        let target = Self.qoderTarget
         Task.detached(priority: .utility) { [weak self] in
-            let run = CollectorRunner.run(provider: "qoder")
+            let run = CollectorRunner.run(provider: target.name, timeout: target.timeout)
             guard let self else { return }
             await MainActor.run {
-                if let output = run.output, let result = output.providers?["qoder"] {
-                    self.apply(result, to: .qoder)
-                } else {
-                    self.qoderError = run.error ?? "采集器未返回 Qoder 数据"
-                }
+                self.consume(run, from: target)
                 self.lastQoderAt = Date()
                 self.qoderRefreshing = false
                 self.saveCache()
@@ -946,12 +1181,13 @@ final class UsageStore: ObservableObject {
         guard remindCodexReset,
               let windows = codex?.windows,
               !windows.isEmpty,
-              let window = windows.max(by: { $0.windowMinutes < $1.windowMinutes }),
+              let window = windows.max(by: { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }),
+              let minutes = window.windowMinutes,
               let reset = window.resetsAt else { return }
         let now = Int(Date().timeIntervalSince1970)
         guard reset > now else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Codex \(Format.window(window.windowMinutes))额度已重置"
+        content.title = "Codex \(Format.window(minutes))额度已重置"
         content.body = "额度窗口已刷新，可以继续使用。"
         content.sound = .default
         content.categoryIdentifier = NotificationCategory.codex
@@ -965,15 +1201,35 @@ final class UsageStore: ObservableObject {
         )
     }
 
+    private func currentError(for provider: Provider) -> String? {
+        switch provider {
+        case .codex: return codexError
+        case .workbuddy: return workbuddyError
+        case .qoder: return qoderError
+        }
+    }
+
+    private func title(for provider: Provider) -> String {
+        switch provider {
+        case .codex: return "Codex"
+        case .workbuddy: return "WorkBuddy"
+        case .qoder: return "Qoder"
+        }
+    }
+
     private func apply(_ result: ProviderResult, to provider: Provider) {
         guard result.ok == true else {
-            let message = result.error ?? "未知错误"
-            switch provider {
-            case .codex: codexError = message
-            case .workbuddy: workbuddyError = message
-            case .qoder: qoderError = message
+            let message = result.error
+                ?? (result.ok == nil ? "采集结果缺少状态字段，请升级应用" : "未知错误")
+            // 只在状态变化时记一行，否则「未登录」这类稳定状态会被每个周期刷满日志。
+            if currentError(for: provider) != message {
+                Diagnostics.record("collector", "\(title(for: provider)) 数据不可用：\(message)")
             }
+            setError(message, for: provider)
             return
+        }
+        if currentError(for: provider) != nil {
+            Diagnostics.record("collector", "\(title(for: provider)) 数据恢复")
         }
         switch provider {
         case .codex:
@@ -1029,12 +1285,14 @@ final class UsageStore: ObservableObject {
             remaining: result.remaining,
             total: result.total,
             remainingPercent: result.remainingPercent,
-            windows: (result.windows ?? []).map {
-                UsageWindow(
-                    minutes: $0.windowMinutes,
-                    remainingPercent: $0.remainingPercent,
-                    usedPercent: $0.usedPercent,
-                    resetsAt: $0.resetsAt
+            windows: (result.windows ?? []).compactMap { window in
+                guard let minutes = window.windowMinutes,
+                      let remaining = window.remainingPercent else { return nil }
+                return UsageWindow(
+                    minutes: minutes,
+                    remainingPercent: remaining,
+                    usedPercent: window.usedPercent ?? (100 - remaining),
+                    resetsAt: window.resetsAt
                 )
             }
         )
@@ -1057,12 +1315,78 @@ final class UsageStore: ObservableObject {
     }
 
     private func loadHistory() {
-        guard let data = try? Data(contentsOf: Self.historyURL),
-              let file = try? JSONDecoder().decode(HistoryFile.self, from: data) else { return }
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: Self.historyURL.path) else { return }
+        if let file = Self.decodeHistory(at: Self.historyURL) {
+            applyHistory(file)
+            return
+        }
+        // 主文件读不出：先确认备份能不能救，再把坏文件改名留证。
+        let fallback = Self.decodeHistory(at: Self.historyBackupURL)
+        moveMainHistoryAside()
+        if let file = fallback {
+            Diagnostics.record("history", "history.json 无法解析，已回退到上一份备份")
+            applyHistory(file)
+            return
+        }
+        // 备份也读不出：坏文件已经改名保留，重新开始积累不会覆盖唯一证据。
+        try? manager.removeItem(at: Self.historyBackupURL)
+        Diagnostics.record("history", "历史文件与备份均无法解析，已改名保留后重新开始积累")
+    }
+
+    private func applyHistory(_ file: HistoryFile) {
         let now = Date()
         qoderHistory = UsageAnalytics.prune(file.qoder ?? [], now: now)
         workbuddyHistory = UsageAnalytics.prune(file.workbuddy ?? [], now: now)
         codexHistory = UsageAnalytics.prune(file.codex ?? [], now: now)
+    }
+
+    private static func decodeHistory(at url: URL) -> HistoryFile? {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(HistoryFile.self, from: data)
+    }
+
+    /// 把读不出的主文件改名留证；备份是否删除由调用方决定。
+    private func moveMainHistoryAside() {
+        let manager = FileManager.default
+        let stamp = Int(Date().timeIntervalSince1970)
+        let kept = Self.historyURL.deletingPathExtension()
+            .appendingPathExtension("corrupt-\(stamp)")
+            .appendingPathExtension("json")
+        try? manager.removeItem(at: kept)
+        try? manager.moveItem(at: Self.historyURL, to: kept)
+        // 只留最近两份取证文件，避免长期故障把目录塞满。
+        let directory = Self.historyURL.deletingLastPathComponent()
+        guard let names = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
+        let corrupt = names.filter { $0.hasPrefix("history.corrupt-") }.sorted()
+        for name in corrupt.dropLast(2) {
+            try? manager.removeItem(at: directory.appendingPathComponent(name))
+        }
+    }
+
+    private func saveHistory() {
+        let file = HistoryFile(
+            qoder: qoderHistory,
+            workbuddy: workbuddyHistory,
+            codex: codexHistory
+        )
+        guard let data = try? JSONEncoder().encode(file) else {
+            Diagnostics.record("history", "历史编码失败，本轮未写入")
+            return
+        }
+        let manager = FileManager.default
+        let directory = Self.historyURL.deletingLastPathComponent()
+        do {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            // 每次覆盖前先轮换一份备份：写入被中断时最多退回上一份，不会两个文件一起坏。
+            if manager.fileExists(atPath: Self.historyURL.path) {
+                try? manager.removeItem(at: Self.historyBackupURL)
+                try manager.copyItem(at: Self.historyURL, to: Self.historyBackupURL)
+            }
+            try data.write(to: Self.historyURL, options: .atomic)
+        } catch {
+            Diagnostics.record("history", "历史写入失败：\(error.localizedDescription)")
+        }
     }
 
     private func seedHistoryFromCache() {
@@ -1092,18 +1416,6 @@ final class UsageStore: ObservableObject {
         samples = UsageAnalytics.prune(samples)
         setHistory(samples, for: provider)
         saveHistory()
-    }
-
-    private func saveHistory() {
-        let file = HistoryFile(
-            qoder: qoderHistory,
-            workbuddy: workbuddyHistory,
-            codex: codexHistory
-        )
-        guard let data = try? JSONEncoder().encode(file) else { return }
-        let directory = Self.historyURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: Self.historyURL, options: .atomic)
     }
 
     func exportHistory() {
@@ -1242,8 +1554,15 @@ final class UsageStore: ObservableObject {
     ) {
         let center = notificationCenter
         center.getNotificationSettings { settings in
-            guard settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional else { return }
+            let allowed = settings.authorizationStatus == .authorized
+                || settings.authorizationStatus == .provisional
+            Diagnostics.record(
+                "alert",
+                allowed
+                    ? "\(provider.displayName) \(title)｜\(body)"
+                    : "\(provider.displayName) \(title)｜通知未授权，只保留面板提示"
+            )
+            guard allowed else { return }
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
@@ -1256,7 +1575,9 @@ final class UsageStore: ObservableObject {
                 trigger: nil
             )
             center.add(request) { error in
-                if error == nil {
+                if let error {
+                    Diagnostics.record("notify", "通知投递失败：\(error.localizedDescription)")
+                } else {
                     onDelivered?()
                 }
             }
@@ -1292,8 +1613,12 @@ final class UsageStore: ObservableObject {
     }
 
     private func loadCache() {
+        guard FileManager.default.fileExists(atPath: Self.cacheURL.path) else { return }
         guard let data = try? Data(contentsOf: Self.cacheURL),
-              let cache = try? JSONDecoder().decode(CacheFile.self, from: data) else { return }
+              let cache = try? JSONDecoder().decode(CacheFile.self, from: data) else {
+            Diagnostics.record("cache", "cache.json 无法解析，本次启动从空白状态开始")
+            return
+        }
         codex = cache.codex
         workbuddy = cache.workbuddy
         qoder = cache.qoder
@@ -1309,10 +1634,17 @@ final class UsageStore: ObservableObject {
             fastAt: lastFastAt?.timeIntervalSince1970,
             qoderAt: lastQoderAt?.timeIntervalSince1970
         )
-        guard let data = try? JSONEncoder().encode(cache) else { return }
-        let directory = Self.cacheURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: Self.cacheURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(cache) else {
+            Diagnostics.record("cache", "缓存编码失败")
+            return
+        }
+        do {
+            let directory = Self.cacheURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: Self.cacheURL, options: .atomic)
+        } catch {
+            Diagnostics.record("cache", "缓存写入失败：\(error.localizedDescription)")
+        }
     }
 }
 
@@ -1388,6 +1720,10 @@ enum Format {
         if seconds < 3600 { return "\(Int(seconds / 60)) 分钟前" }
         if seconds < 86400 { return "\(Int(seconds / 3600)) 小时前" }
         return "\(Int(seconds / 86400)) 天前"
+    }
+
+    static func window(_ minutes: Int?) -> String {
+        window(minutes ?? 0)
     }
 
     static func window(_ minutes: Int) -> String {
@@ -2253,7 +2589,7 @@ struct MenuContent: View {
                         UsageBar(
                             label: "\(Format.window(window.windowMinutes))窗口",
                             detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
-                            fraction: window.usedPercent / 100,
+                            fraction: (window.usedPercent ?? 0) / 100,
                             tint: Theme.codex
                         )
                     }
@@ -2270,8 +2606,8 @@ struct MenuContent: View {
                 HStack(spacing: 8) {
                     Text("额外 Credits")
                     Spacer()
-                    if let credits = codex.credits, credits.hasCredits {
-                        Text(credits.unlimited ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
+                    if let credits = codex.credits, credits.hasCredits == true {
+                        Text(credits.unlimited == true ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
                     } else {
                         Text("无")
                     }
@@ -2778,6 +3114,13 @@ struct MenuContent: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .help("导出近 14 天用量历史为 CSV")
+            Button("诊断") {
+                Apps.revealDiagnostics()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .help("在 Finder 中显示本地诊断日志（已脱敏，不含凭据与账号信息）")
             Button("退出") {
                 NSApplication.shared.terminate(nil)
             }
@@ -2828,6 +3171,17 @@ enum Apps {
     static func openURL(_ string: String) {
         guard let url = URL(string: string) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    static func revealDiagnostics() {
+        let log = Diagnostics.logURL
+        let manager = FileManager.default
+        try? manager.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: log.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([log])
+        } else {
+            NSWorkspace.shared.open(log.deletingLastPathComponent())
+        }
     }
 
     static func openTerminal(_ command: String) {

@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.8**（build 14） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.4.9**（build 15） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 功能
 
@@ -22,6 +22,8 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **通知快捷动作**：点击领取、重置或预警通知可直接打开对应客户端。
 - **版本检查与升级**：每 24 小时自动检查 GitHub Releases，也可手动检查；发现新版本后自动匹配当前芯片下载 DMG，下载完成时按 Release 的 `SHA256SUMS` 资产（或说明中的「校验」表）比对 SHA-256，通过后自动打开 DMG，拖入「应用程序」即可完成升级。手动检查后会在面板顶部给出结果提示与上次检查时间，取不到校验值时明确标注「SHA-256 未校验」。
 - **CSV 导出**：面板底部「导出」按钮可将近 14 天用量历史导出为 CSV，便于离线分析。
+- **采集与本地数据兜底**：三家分开采集、各给各的超时预算（Codex 70 秒 / WorkBuddy 25 秒 / Qoder 80 秒），一家卡住不再拖累另外两家；超时、缺少 python3、输出结构变化这类问题按指数退避重试，原因直接写在卡片上。历史文件损坏时自动回退上一份备份，主文件改名留证后重新积累，不再出现「一觉醒来历史清零」；采集器输出按平台隔离解码，某一家字段变化不会把其他两家一起打回「无法解析」。
+- **本地诊断日志**：采集失败、历史 / 缓存读写异常、告警触发与更新下载结果会写入已脱敏的本地日志（256 KB 自动轮换），面板底部「诊断」可一键在 Finder 中定位，排查问题时不必再靠猜。
 - **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 90 秒（CLI 采集单次约 5 秒）；展开面板时若 Qoder 数据已超过 90 秒会立刻补采一次，先显示缓存值、采集回来就地更新。另支持手动刷新与系统唤醒后自动刷新。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 14 天。
@@ -95,10 +97,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.8` | 当前安装版本 |
+| `v1.4.9` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
+| `诊断` | 在 Finder 中显示本地诊断日志（已脱敏，不含凭据与账号信息） |
 | `已是最新 · HH:mm` / `重试检查` | 手动检查 GitHub Releases；失败时悬停可查看原因 |
 | `检查于 x 前` | 最近一次检查更新的时间（自动与手动共用同一记录） |
 
@@ -131,11 +134,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.8-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.8-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.8.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.8/TokenTool-1.4.8.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.9-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.4.9-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.4.9.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.8/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.9/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -204,9 +207,12 @@ open /Applications/TokenTool.app
   ```
   ~/Library/Application Support/TokenTool/cache.json
   ~/Library/Application Support/TokenTool/history.json
+  ~/Library/Application Support/TokenTool/history.json.bak
   ```
+- `history.json` 每次覆盖前会轮换出 `history.json.bak`；主文件损坏时自动回退备份，坏文件改名为 `history.corrupt-<时间戳>.json` 保留供排查（只留最近两份），不会用空数据覆盖唯一证据。
+- 诊断日志路径为 `~/Library/Application Support/TokenTool/logs/diagnostics.log`，只记录采集失败、历史 / 缓存读写异常、告警触发与更新下载结果；写盘前统一脱敏（token、授权链接参数、长串随机值），不含凭据、账号标识或额度明细。单文件上限 256 KB，超限自动丢弃前半段。
 - 历史快照最多保留 14 天，用于趋势与耗尽预测；不包含任何账号凭据。
-- 清除缓存：退出应用后删除上述文件即可。
+- 清除缓存：退出应用后删除 `~/Library/Application Support/TokenTool` 即可（缓存、历史与诊断日志都在其中）。
 - 用量接口可能随官方客户端升级而变化；如遇读取失败，请先更新对应客户端或 CLI。
 
 ## 常见问题
@@ -220,6 +226,7 @@ open /Applications/TokenTool.app
 | WorkBuddy 未运行 / 授权失效 | 打开 WorkBuddy 并重新登录，保持客户端运行后刷新 |
 | Codex 提示未找到 CLI | 安装并登录 ChatGPT.app，确认 `/Applications/ChatGPT.app` 存在 |
 | 刷新失败但仍有旧数据 | 卡片显示「上次成功」，数据保留，稍后手动刷新即可 |
+| 卡片显示「采集超时」或「需要 python3」 | 先按提示排除环境问题再点「刷新」；连续失败会自动退避重试，失败细节可在底部「诊断」打开的日志里查看 |
 | 菜单栏找不到应用 | 确认未全部隐藏（全部隐藏时显示 `AI`）；或重新启动应用 |
 | 开机启动无效 | 检查 `~/Library/LaunchAgents/com.local.tokentool.plist` 是否存在，并在面板重新开关一次 |
 | 没有收到提醒 | 在「系统设置 → 通知」中允许 TokenTool / AI 用量 的通知权限；面板出现提示时点击「去开启」 |
@@ -246,6 +253,7 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── Views.swift          # 菜单栏标签、详情面板、数据状态、通知与刷新调度
 ├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测、用量洞察
 ├── Update.swift         # GitHub Releases 版本检查、安装包匹配与下载
+├── Diagnostics.swift    # 本地诊断日志（脱敏、256 KB 轮换）
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
 ├── AppIcon.icns         # 应用图标
 ├── LICENSE              # MIT 开源许可证
@@ -256,6 +264,14 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.4.9
+
+- **历史不再因单个坏文件清零**：`history.json` 每次写入前轮换一份 `history.json.bak`；主文件读不出时自动回退备份，同时把坏文件改名成 `history.corrupt-<时间戳>.json` 留证（只留最近两份），不会再出现「写入时把唯一的历史覆盖成空数组」。
+- **采集输出按平台隔离解码**：Codex / WorkBuddy / Qoder 分别解析，某一家字段改名或类型变化只让这一家降级为「部分未知」，不再让整份 JSON 解码失败、把另外两家一起打回「无法解析」；采集器版本号不符时直接提示升级应用。
+- **采集子进程不再泄漏**：超时分支过去直接 return，每次超时都留下一个僵尸子进程和两个未关闭的文件句柄；现在统一先 TERM 再 KILL 并收尸，句柄与临时文件在 `defer` 里清理。失败原因也从统一的「采集超时」细化为超时秒数、缺少 python3 / 命令行工具、退出码与 stderr 摘要。
+- **分开的采集预算**：Codex 与 WorkBuddy 不再共用一次 80 秒预算，改为各自采集（Codex 70 秒、WorkBuddy 25 秒），Codex 卡住时 WorkBuddy 仍能按时刷新；环境类失败按指数退避重试（最长 15 分钟），不会每 60 秒反复重开子进程。
+- **隐私安全的本地诊断日志**：采集失败、历史 / 缓存读写异常、告警触发与更新下载结果写入 `logs/diagnostics.log`，写盘前脱敏，单文件 256 KB 自动轮换；面板底部新增「诊断」入口，一键在 Finder 中定位。
 
 ### 1.4.8
 
@@ -373,7 +389,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.7（build 13） |
+| 当前版本 | 1.4.9（build 15） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

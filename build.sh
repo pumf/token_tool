@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 BUILD="build"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
 UNIVERSAL_APP="$BUILD/TokenTool.app"
 ARM_APP="$BUILD/TokenTool-arm64.app"
 INTEL_APP="$BUILD/TokenTool-x86_64.app"
@@ -15,7 +16,7 @@ for arch in arm64 x86_64; do
     swiftc -O -parse-as-library \
         -target "${arch}-apple-macos12.0" \
         -framework SwiftUI -framework AppKit -framework Combine -framework UserNotifications \
-        Analytics.swift Views.swift Export.swift Update.swift TokenToolApp.swift \
+        Analytics.swift Diagnostics.swift Views.swift Export.swift Update.swift TokenToolApp.swift \
         -o "$BUILD/TokenTool-${arch}"
 done
 
@@ -27,6 +28,9 @@ assemble_app() {
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cp "$binary" "$app/Contents/MacOS/TokenTool"
     cp Info.plist "$app/Contents/Info.plist"
+    # 「获取信息」文案跟随真实版本号，避免手写的版本说明长期停留在旧版本。
+    /usr/libexec/PlistBuddy -c "Set :CFBundleGetInfoString TokenTool ${VERSION} · MIT License" \
+        "$app/Contents/Info.plist"
     cp collector.py "$app/Contents/Resources/collector.py"
     cp AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
     cp LICENSE "$app/Contents/Resources/LICENSE.txt"
