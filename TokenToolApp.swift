@@ -103,6 +103,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var lastCloseAt = Date.distantPast
     private var appliedMaxHeight: CGFloat = 0
+    private var measuredPanelHeight: CGFloat = 0
     private var blinkTimer: Timer?
     private var blinkDimmed = false
 
@@ -169,6 +170,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         updateTitle()
         updateContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        DispatchQueue.main.async { [weak self] in
+            self?.resizeIfNeeded()
+        }
         store.refreshQoderIfStale()
     }
 
@@ -243,23 +247,46 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let height = maxPanelHeight
         guard abs(height - appliedMaxHeight) > 0.5 else { return false }
         appliedMaxHeight = height
-        hostingView.rootView = MenuPanel(store: store, updates: updates, maxHeight: height)
+        hostingView.rootView = makePanel(maxHeight: height)
         return true
+    }
+
+    private func makePanel(maxHeight: CGFloat) -> MenuPanel {
+        MenuPanel(store: store, updates: updates, maxHeight: maxHeight) { [weak self] height in
+            guard let self else { return }
+            self.measuredPanelHeight = height
+            // 回调发生在 SwiftUI 布局中，等这一轮布局结束再改弹窗尺寸。
+            DispatchQueue.main.async { [weak self] in
+                self?.resizeIfNeeded()
+            }
+        }
+    }
+
+    /// 面板高度跟随内容：内容变矮就收，不留下方空白；超过上限才滚动。
+    private func applyPanelHeight() {
+        guard measuredPanelHeight > 0 else { return }
+        let height = max(1, min(measuredPanelHeight, appliedMaxHeight))
+        guard abs(popover.contentSize.height - height) > 0.5 else { return }
+        popover.contentSize = NSSize(width: Token.panelWidth, height: height)
     }
 
     private func updateContentSize() {
         hostingView.layoutSubtreeIfNeeded()
         let fitting = hostingView.fittingSize
-        let height = min(ceil(fitting.height), appliedMaxHeight)
+        let natural = measuredPanelHeight > 0 ? measuredPanelHeight : ceil(fitting.height)
         popover.contentSize = NSSize(
             width: max(Token.panelWidth, ceil(fitting.width)),
-            height: max(1, height)
+            height: max(1, min(ceil(natural), appliedMaxHeight))
         )
     }
 
     private func resizeIfNeeded() {
         guard popover.isShown else { return }
         hostingView.layoutSubtreeIfNeeded()
+        if measuredPanelHeight > 0 {
+            applyPanelHeight()
+            return
+        }
         let height = max(1, min(ceil(hostingView.fittingSize.height), appliedMaxHeight))
         guard abs(popover.contentSize.height - height) > 0.5 else { return }
         popover.contentSize = NSSize(width: popover.contentSize.width, height: height)

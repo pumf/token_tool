@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.4.9**（build 15） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.5.0**（build 16） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 界面预览
 
@@ -13,6 +13,10 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 | 面板（浅色） | 面板（深色） |
 | --- | --- |
 | <img src="docs/screenshots/panel-light.png" width="380" alt="浅色面板：三家额度、今日消耗、7 日趋势与耗尽预测"> | <img src="docs/screenshots/panel-dark.png" width="380" alt="深色面板"> |
+
+| 简单模式（浅色） | 简单模式（深色） |
+| --- | --- |
+| <img src="docs/screenshots/panel-simple-light.png" width="380" alt="简单模式：三张卡片只保留名称、套餐、主数值与一条进度条"> | <img src="docs/screenshots/panel-simple-dark.png" width="380" alt="深色简单模式"> |
 
 | 设置面板 | 额度告警 |
 | --- | --- |
@@ -28,8 +32,9 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 - **菜单栏常驻**：紧凑显示三家的关键指标（Qoder 剩余积分、WorkBuddy 剩余积分、Codex 已用比例），带完整 tooltip。
 - **独立显示开关**：面板底部可分别隐藏 / 显示 Qoder、WorkBuddy、Codex；全部隐藏时仍保留一个 `AI` 入口，点击照常展开面板，数据也继续在后台采集。
-- **自适应面板**：面板高度随屏幕可用区域自动调整；屏幕较小时内容可滚动，不再被裁切。三家卡片采用统一的五段布局（图标与名称 / 主数值 / 进度 / 洞察 / 脚注），高度对齐；正文最小字号 10pt，主数值 22pt 等宽数字。
-- **设置折叠**：菜单栏显示、提醒、智能预警与低额度阈值收进右上角齿轮，折叠时仅保留一行快捷栏（最近刷新时间、预警阈值开关、展开入口）。
+- **自适应面板**：窗口高度跟着内容走——内容较短时弹窗同步收起，底部不再留一段空白；超过屏幕可用区域才整页滚动。三家卡片采用统一的五段布局（图标与名称 / 主数值 / 进度 / 洞察 / 脚注），高度对齐；正文最小字号 10pt，主数值 22pt 等宽数字。
+- **简单模式**：快捷栏「简单」开关（设置区「界面」一行同样可切换）让三张卡片只保留名称、套餐、主数值与一条主要进度条，隐藏洞察、预测、更新时间与次要比率；告警、错误与关注摘要照常显示，开关状态本地保存。
+- **设置折叠**：菜单栏显示、提醒、智能预警与低额度阈值收进右上角齿轮，折叠时仅保留一行快捷栏（最近刷新时间、预警阈值开关、简单模式开关、展开入口）。
 - **详情面板**：套餐名称、Credits 进度条、剩余 / 总量、限额窗口、重置时间、最后更新时间与错误状态。
 - **用量洞察**：按本机历史采样估算今日消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder CLI 未安装时「安装 CLI」一键下载官方安装包并在装好后自动发起登录，未登录时「登录」直接在浏览器完成授权，无需打开终端。
@@ -77,7 +82,7 @@ Q 1,770   W 12,480   C 8.5%
 - **打开**：启动对应客户端（Qoder CN / WorkBuddy / ChatGPT）。
 - **官网**：在浏览器打开官方站点。
 
-面板默认只显示三张卡片与一行快捷栏；点右上角齿轮展开设置区，收起时设置不再常驻占位。快捷栏从左到右是最近刷新时间、`预警 30%` 开关（点击切换智能预警的启用状态，标签即当前低额度阈值）与「更多设置」入口。
+面板默认只显示三张卡片与一行快捷栏；点右上角齿轮展开设置区，收起时设置不再常驻占位。快捷栏从左到右是最近刷新时间、`预警 30%` 开关（点击切换智能预警的启用状态，标签即当前低额度阈值）、`简单` 开关（在简单 / 完整模式间切换）与「设置」入口。
 
 有需要注意的事情时，标题下方会出现一条「关注摘要」：告警项在前、待领取项在后，每条写明平台、原因与时刻（例如「WorkBuddy 剩余 4%」「Codex 周窗口预计 3.2 小时后耗尽」「Qoder 今日 100 Credits 待领取」），右侧一键打开对应客户端。待领取项在检测到**今天**剩余额度或套餐总量出现过增加（即领取到账）后自动消失，从当天 00:00 起判定，提前或延后领取都不会误报；判定会直接比对最新一次采集值，所以领取后最多 90 秒提示就会收起，不必等 5 分钟的历史采样点。也可点「今天不再提醒」按天忽略（次日恢复）。点「静音 30 分钟」可临时收起摘要与菜单栏高亮，标题下方会留下「静音中，HH:mm 自动恢复提醒」与「取消静音」。
 
@@ -115,7 +120,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.4.9` | 当前安装版本 |
+| `v1.5.0` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -152,11 +157,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.4.9-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.4.9-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.4.9.dmg`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.4.9/TokenTool-1.4.9.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.5.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.5.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.5.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.4.9/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.5.0/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -284,6 +289,12 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.5.0
+
+- **面板高度跟随内容**：弹窗尺寸按内容实际高度设置，不再固定撑到屏幕可用高度。收起设置、提醒消失、切到简单模式后，下方不会再留一段空白；内容超过屏幕时仍然整页滚动。
+- **简单模式**：快捷栏新增「简单」开关（设置区「界面」一行也有），三张卡片只保留名称、套餐、主数值与一条主要进度条，隐藏洞察、预测、更新时间与次要比率；出错与低额度提示仍会照常显示。演示数据下面板从约 880pt 降到约 650pt，开关状态本地保存。
+- 快捷栏的「更多设置」改名为「设置」，为简单模式开关腾出位置。
+
 ### 1.4.9
 
 - **历史不再因单个坏文件清零**：`history.json` 每次写入前轮换一份 `history.json.bak`；主文件读不出时自动回退备份，同时把坏文件改名成 `history.corrupt-<时间戳>.json` 留证（只留最近两份），不会再出现「写入时把唯一的历史覆盖成空数组」。
@@ -408,7 +419,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.4.9（build 15） |
+| 当前版本 | 1.5.0（build 16） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

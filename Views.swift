@@ -493,6 +493,9 @@ final class UsageStore: ObservableObject {
     @Published var menuBarBlink: Bool {
         didSet { UserDefaults.standard.set(menuBarBlink, forKey: "attention.menuBar.blink") }
     }
+    @Published var simpleMode: Bool {
+        didSet { UserDefaults.standard.set(simpleMode, forKey: "ui.simpleMode") }
+    }
     @Published private(set) var attentionItems: [AttentionItem] = []
     @Published private(set) var attentionSince: Date?
     @Published private(set) var mutedUntil: Date?
@@ -565,6 +568,7 @@ final class UsageStore: ObservableObject {
         lowBalanceThreshold = Self.storedLowThreshold()
         menuBarHighlight = Self.storedFlag("attention.menuBar.highlight")
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
+        simpleMode = UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool ?? false
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
         mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
         loadCache()
@@ -1923,6 +1927,7 @@ struct ProviderCard<Detail: View>: View {
     let status: String?
     let footer: String
     let links: [ProviderLink]
+    let compact: Bool
     let detail: Detail
 
     init(
@@ -1936,6 +1941,7 @@ struct ProviderCard<Detail: View>: View {
         status: String? = nil,
         footer: String,
         links: [ProviderLink] = [],
+        compact: Bool = false,
         @ViewBuilder detail: () -> Detail
     ) {
         self.title = title
@@ -1948,11 +1954,12 @@ struct ProviderCard<Detail: View>: View {
         self.status = status
         self.footer = footer
         self.links = links
+        self.compact = compact
         self.detail = detail()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Token.spaceRow) {
+        VStack(alignment: .leading, spacing: compact ? Token.spaceTight + 2 : Token.spaceRow) {
             HStack(spacing: Token.spaceRow) {
                 RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
                     .fill(color.opacity(0.14))
@@ -1965,9 +1972,11 @@ struct ProviderCard<Detail: View>: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(Token.title)
-                    Text(subtitle)
-                        .font(Token.caption)
-                        .foregroundStyle(.secondary)
+                    if !compact {
+                        Text(subtitle)
+                            .font(Token.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: Token.spaceRow)
                 if let plan {
@@ -2002,7 +2011,7 @@ struct ProviderCard<Detail: View>: View {
                 detail
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(minHeight: status == nil ? Token.detailMinHeight : 0, alignment: .top)
+            .frame(minHeight: compact || status != nil ? 0 : Token.detailMinHeight, alignment: .top)
 
             if let status {
                 HStack(alignment: .top, spacing: Token.spaceTight - 2) {
@@ -2023,41 +2032,25 @@ struct ProviderCard<Detail: View>: View {
                 .help(status)
             }
 
-            Divider()
-                .overlay(Color(nsColor: .separatorColor).opacity(0.5))
-
-            HStack(spacing: Token.spaceRow) {
-                Text(footer)
-                    .font(Token.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Spacer(minLength: Token.spaceTight)
-                ForEach(Array(links.enumerated()), id: \.offset) { _, link in
-                    Button {
-                        link.action?()
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: link.icon)
-                                .font(.system(size: 10, weight: .semibold))
-                            Text(link.title)
-                                .font(.system(size: 10, weight: .medium))
-                        }
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
-                        .background(
-                            RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
-                                .fill(Color.clear)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(link.action == nil)
-                    .help(link.help)
+            if compact {
+                if !links.isEmpty {
+                    linksRow
                 }
+            } else {
+                Divider()
+                    .overlay(Color(nsColor: .separatorColor).opacity(0.5))
+                HStack(spacing: Token.spaceRow) {
+                    Text(footer)
+                        .font(Token.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer(minLength: Token.spaceTight)
+                    linksRow
+                }
+                .frame(height: 20)
             }
-            .frame(height: 20)
         }
-        .padding(Token.spaceCard)
+        .padding(compact ? Token.spaceTight + 4 : Token.spaceCard)
         .background(
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .fill(Token.cardFill)
@@ -2066,6 +2059,34 @@ struct ProviderCard<Detail: View>: View {
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
         )
+    }
+
+    private var linksRow: some View {
+        HStack(spacing: Token.spaceRow) {
+            ForEach(Array(links.enumerated()), id: \.offset) { _, link in
+                Button {
+                    link.action?()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: link.icon)
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(link.title)
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                            .fill(Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(link.action == nil)
+                .help(link.help)
+            }
+        }
+        .frame(height: 20)
     }
 }
 
@@ -2214,8 +2235,12 @@ struct MenuContent: View {
             Image(systemName: "clock")
                 .font(.system(size: 10, weight: .semibold))
             Text("刷新 \(Format.time(store.lastFastAt))")
+                .lineLimit(1)
+                .fixedSize()
             Text("·").foregroundStyle(.quaternary)
             Text("Qoder \(Format.time(store.lastQoderAt))")
+                .lineLimit(1)
+                .fixedSize()
             Spacer(minLength: Token.spaceTight)
             settingChip(
                 "预警 \(store.lowBalanceThreshold)%",
@@ -2224,11 +2249,20 @@ struct MenuContent: View {
                 iconOff: "exclamationmark.triangle",
                 help: "任一平台剩余低于 \(store.lowBalanceThreshold)% 时提醒"
             )
+            settingChip(
+                "简单",
+                isOn: $store.simpleMode,
+                iconOn: "rectangle.compress.vertical",
+                iconOff: "rectangle.expand.vertical",
+                help: "简单模式：三个平台只显示主要用量，隐藏洞察、预测与更新时间"
+            )
             Button {
                 settingsExpanded.toggle()
             } label: {
                 HStack(spacing: 3) {
-                    Text("更多设置")
+                    Text("设置")
+                        .lineLimit(1)
+                        .fixedSize()
                         .font(.system(size: 10, weight: .medium))
                     Image(systemName: settingsExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
@@ -2250,6 +2284,7 @@ struct MenuContent: View {
 
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: Token.spaceRow) {
+            interfaceSettings
             menuBarSettings
             reminderSettings
             alertSettings
@@ -2478,9 +2513,12 @@ struct MenuContent: View {
             valueCaption: qoderCaption,
             status: store.qoderError,
             footer: qoderFooter,
-            links: qoderLinks
+            links: qoderLinks,
+            compact: store.simpleMode
         ) {
-            if let qoder = store.qoder {
+            if store.simpleMode {
+                qoderPrimaryBar
+            } else if let qoder = store.qoder {
                 let addonTotal = qoder.addonTotal ?? 0
                 let addonUsed = qoder.addonUsed ?? 0
                 let planTotal = qoder.planTotal ?? 0
@@ -2519,6 +2557,37 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
+    private var qoderPrimaryBar: some View {
+        if let qoder = store.qoder {
+            let planTotal = qoder.planTotal ?? 0
+            let planUsed = qoder.planUsed ?? 0
+            let addonTotal = qoder.addonTotal ?? 0
+            let addonUsed = qoder.addonUsed ?? 0
+            if planTotal > 0 {
+                UsageBar(
+                    label: "套餐额度",
+                    detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
+                    fraction: planUsed / planTotal,
+                    tint: Theme.qoder
+                )
+            } else if addonTotal > 0 {
+                UsageBar(
+                    label: "附加额度",
+                    detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
+                    fraction: addonUsed / addonTotal,
+                    tint: Theme.qoder
+                )
+            } else {
+                Text("当前套餐未包含 Credits")
+                    .font(Token.meta)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            emptyContent
+        }
+    }
+
     private var qoderCaption: String {
         guard store.qoder?.ok == true, let total = store.qoder?.total, total > 0 else {
             return "等待采集"
@@ -2537,9 +2606,12 @@ struct MenuContent: View {
             valueCaption: workbuddyCaption,
             status: store.workbuddyError,
             footer: workbuddyFooter,
-            links: workbuddyLinks
+            links: workbuddyLinks,
+            compact: store.simpleMode
         ) {
-            if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
+            if store.simpleMode {
+                workbuddyPrimaryBar
+            } else if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
                 UsageBar(
                     label: "Credits",
                     detail: "已用 \(Format.credits(workbuddy.used)) / \(Format.credits(total))",
@@ -2563,6 +2635,24 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
+    private var workbuddyPrimaryBar: some View {
+        if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
+            UsageBar(
+                label: "Credits",
+                detail: "已用 \(Format.credits(workbuddy.used)) / \(Format.credits(total))",
+                fraction: (workbuddy.usedPercent ?? 0) / 100,
+                tint: Theme.workbuddy
+            )
+        } else if store.workbuddy != nil {
+            Text("暂无可用的 Credits 资源包")
+                .font(Token.meta)
+                .foregroundStyle(.secondary)
+        } else {
+            emptyContent
+        }
+    }
+
     private var workbuddyCaption: String {
         guard store.workbuddy?.ok == true, let total = store.workbuddy?.total, total > 0 else {
             return "等待采集"
@@ -2581,9 +2671,12 @@ struct MenuContent: View {
             valueCaption: codexCaption,
             status: store.codexError,
             footer: codexFooter,
-            links: codexLinks
+            links: codexLinks,
+            compact: store.simpleMode
         ) {
-            if let codex = store.codex {
+            if store.simpleMode {
+                codexPrimaryBar
+            } else if let codex = store.codex {
                 if let windows = codex.windows, !windows.isEmpty {
                     ForEach(windows) { window in
                         UsageBar(
@@ -2625,6 +2718,26 @@ struct MenuContent: View {
     private var codexValue: String {
         guard store.codex?.ok == true, let window = store.codex?.primaryWindow else { return "--" }
         return Format.percent(window.remainingPercent)
+    }
+
+    @ViewBuilder
+    private var codexPrimaryBar: some View {
+        if let codex = store.codex {
+            if let window = codex.primaryWindow {
+                UsageBar(
+                    label: "\(Format.window(window.windowMinutes))窗口",
+                    detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
+                    fraction: (window.usedPercent ?? 0) / 100,
+                    tint: Theme.codex
+                )
+            } else {
+                Text("当前账号没有限额窗口")
+                    .font(Token.meta)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            emptyContent
+        }
     }
 
     private var codexCaption: String {
@@ -2845,6 +2958,19 @@ struct MenuContent: View {
                 .frame(width: 62, alignment: .leading)
             chips()
             Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var interfaceSettings: some View {
+        settingRow("界面") {
+            settingChip(
+                "简单模式",
+                isOn: $store.simpleMode,
+                iconOn: "rectangle.compress.vertical",
+                iconOff: "rectangle.expand.vertical",
+                help: "三个平台只显示主要用量，隐藏洞察、预测与更新时间"
+            )
         }
     }
 
@@ -3135,14 +3261,40 @@ struct MenuPanel: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var updates: UpdateChecker
     let maxHeight: CGFloat
+    var onHeightChange: ((CGFloat) -> Void)? = nil
+
+    /// 内容自然高度（未裁剪）；为 0 表示还没量过，先按 maxHeight 撑开。
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: contentHeight > maxHeight + 0.5) {
             MenuContent(store: store, updates: updates)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: PanelContentHeightKey.self, value: proxy.size.height)
+                    }
+                )
         }
-        .frame(width: 382)
-        .frame(maxHeight: maxHeight)
+        .frame(width: Token.panelWidth, height: panelHeight)
         .background(.regularMaterial)
+        .onPreferenceChange(PanelContentHeightKey.self) { height in
+            let rounded = ceil(height)
+            guard rounded > 0, abs(rounded - contentHeight) > 0.5 else { return }
+            contentHeight = rounded
+            onHeightChange?(rounded)
+        }
+    }
+
+    private var panelHeight: CGFloat {
+        guard contentHeight > 0 else { return maxHeight }
+        return min(contentHeight, maxHeight)
+    }
+}
+
+private struct PanelContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
