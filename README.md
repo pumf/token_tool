@@ -2,9 +2,9 @@
 
 macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBuddy**、**Codex** 的额度与剩余用量。
 
-无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
+无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.5.0**（build 16） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.6.0**（build 17） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 界面预览
 
@@ -20,7 +20,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 | 设置面板 | 额度告警 |
 | --- | --- |
-| <img src="docs/screenshots/settings-light.png" width="380" alt="齿轮展开后的菜单栏显示、提醒、智能预警与阈值设置"> | <img src="docs/screenshots/alert-light.png" width="380" alt="面板顶部关注摘要条：WorkBuddy 剩余 13% 的低额度告警"> |
+| <img src="docs/screenshots/settings-light.png" width="380" alt="齿轮展开后的界面、样式、菜单栏显示、提醒、智能预警与阈值设置"> | <img src="docs/screenshots/alert-light.png" width="380" alt="面板顶部关注摘要条：WorkBuddy 剩余 13% 的低额度告警"> |
 
 菜单栏文字随状态变化：正常、低额度告警（红 `⚠`）、今日待领取（橙 `＋`）、告警闪烁的暗帧，以及三家全部隐藏时的 `AI` 入口。
 
@@ -28,9 +28,16 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 | --- | --- |
 | <img src="docs/screenshots/menubar-light.png" width="470" alt="浅色菜单栏五种状态"> | <img src="docs/screenshots/menubar-dark.png" width="470" alt="深色菜单栏五种状态"> |
 
+菜单栏有三种样式，可在设置区「样式」一行切换，状态本地保存：
+
+| 样式（浅色） | 样式（深色） |
+| --- | --- |
+| <img src="docs/screenshots/styles-light.png" width="470" alt="数字 / 紧凑 / 条形三种菜单栏样式，含告警与闪烁状态"> | <img src="docs/screenshots/styles-dark.png" width="470" alt="深色下的数字 / 紧凑 / 条形三种菜单栏样式"> |
+
 ## 功能
 
 - **菜单栏常驻**：紧凑显示三家的关键指标（Qoder 剩余积分、WorkBuddy 剩余积分、Codex 已用比例），带完整 tooltip。
+- **三种菜单栏样式**：`数字`（完整数值，默认）、`紧凑`（超千用 k 缩写省宽度）、`条形`（品牌色小竖条 + 剩余比例），设置区「样式」一行单选切换，立即生效并本地保存；告警高亮、待领取前缀与闪动在三种样式下都生效。
 - **独立显示开关**：面板底部可分别隐藏 / 显示 Qoder、WorkBuddy、Codex；全部隐藏时仍保留一个 `AI` 入口，点击照常展开面板，数据也继续在后台采集。
 - **自适应面板**：窗口高度跟着内容走——内容较短时弹窗同步收起，底部不再留一段空白；超过屏幕可用区域才整页滚动。三家卡片采用统一的五段布局（图标与名称 / 主数值 / 进度 / 洞察 / 脚注），高度对齐；正文最小字号 10pt，主数值 22pt 等宽数字。
 - **简单模式**：快捷栏「简单」开关（设置区「界面」一行同样可切换）让三张卡片只保留名称、套餐、主数值与一条主要进度条，隐藏洞察、预测、更新时间与次要比率；告警、错误与关注摘要照常显示，开关状态本地保存。
@@ -56,11 +63,21 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 ## 界面说明
 
-菜单栏文字由三部分组成，可在面板中任意组合：
+菜单栏默认用「数字」样式显示三家的关键指标，可在面板中任意组合：
 
 ```
 Q 1,770   W 12,480   C 8.5%
 ```
+
+设置区「样式」一行可切换三种显示方式（单选，立即生效并本地保存）：
+
+| 样式 | 效果 |
+| --- | --- |
+| `数字`（默认） | `Q 1,870   W 3,808   C 58%`：完整数值，最直观 |
+| `紧凑` | `Q1.9k W3.8k C58%`：积分超千用 `k` 缩写，省出一段菜单栏宽度 |
+| `条形` | 三根品牌色小竖条 + `72% 40% 58%`：竖条按剩余比例填充，只用比例不占宽度 |
+
+「条形」左侧的竖条依次对应 Qoder（蓝）、WorkBuddy（绿）、Codex（紫），底部灰色轨道表示该平台本期可用总量；数值取不到时只画空轨道。
 
 需要留意时同一行文字会带上状态前缀，颜色随之变化（优先级：告警 > 待领取 > 正常）：
 
@@ -120,7 +137,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.5.0` | 当前安装版本 |
+| `v1.6.0` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -157,11 +174,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.5.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.5.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.5.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.5.0/TokenTool-1.5.0.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.6.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.6.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.0/TokenTool-1.6.0.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.5.0/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.0/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -288,6 +305,11 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.6.0
+
+- **三种菜单栏样式可切换**：设置区新增「样式」一行，可在 `数字`（完整数值，默认）、`紧凑`（超千用 `k` 缩写）与 `条形`（品牌色小竖条 + 剩余比例）之间单选切换，立即生效并持久保存。条形样式显式绘制 1x/2x 位图，Retina 菜单栏不糊；告警红色 `⚠`、待领取橙色 `＋` 与闪动在三种样式下都生效。
+- 设置区顺序微调：「样式」放在「菜单栏」显示开关之前，先选外观再选平台。
 
 ### 1.5.0
 
@@ -419,7 +441,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.5.0（build 16） |
+| 当前版本 | 1.6.0（build 17） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

@@ -496,6 +496,9 @@ final class UsageStore: ObservableObject {
     @Published var simpleMode: Bool {
         didSet { UserDefaults.standard.set(simpleMode, forKey: "ui.simpleMode") }
     }
+    @Published var menuBarStyle: MenuBarStyle {
+        didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: "menuBar.style") }
+    }
     @Published private(set) var attentionItems: [AttentionItem] = []
     @Published private(set) var attentionSince: Date?
     @Published private(set) var mutedUntil: Date?
@@ -569,6 +572,7 @@ final class UsageStore: ObservableObject {
         menuBarHighlight = Self.storedFlag("attention.menuBar.highlight")
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
         simpleMode = UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool ?? false
+        menuBarStyle = MenuBarStyle(rawValue: UserDefaults.standard.string(forKey: "menuBar.style") ?? "") ?? .classic
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
         mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
         loadCache()
@@ -2090,13 +2094,175 @@ struct ProviderCard<Detail: View>: View {
     }
 }
 
+enum MenuBarStyle: String, CaseIterable, Identifiable {
+    case classic
+    case compact
+    case bars
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .classic: return "数字"
+        case .compact: return "紧凑"
+        case .bars: return "条形"
+        }
+    }
+
+    var sample: String {
+        switch self {
+        case .classic: return "Q 1,870   W 1,208   C 58%"
+        case .compact: return "Q1.9k W1.2k C58%"
+        case .bars: return "条形 + 72% 40% 58%"
+        }
+    }
+}
+
+/// 菜单栏上单个平台的展示数据：三种样式共用同一份，隐藏开关也在这里生效。
+struct MenuBarMetric {
+    let letter: String
+    let value: String
+    let compact: String
+    let percent: String
+    let fraction: Double?
+    let tint: Color
+}
+
+/// 条形样式左侧的小图：每个平台一列竖条，按品牌色从底部填充剩余比例。
+/// 显式给 1x/2x 两种位图，避免菜单栏在 Retina 上放大糊掉。
+enum MenuBarGlyph {
+    static let size = NSSize(width: 15, height: 12)
+
+    static func bars(_ metrics: [MenuBarMetric], dimmed: Bool) -> NSImage {
+        let image = NSImage(size: size)
+        for scale in [CGFloat(2), 1] {
+            guard let rep = bitmap(metrics, dimmed: dimmed, scale: scale) else { continue }
+            image.addRepresentation(rep)
+        }
+        return image
+    }
+
+    private static func bitmap(_ metrics: [MenuBarMetric], dimmed: Bool, scale: CGFloat) -> NSBitmapImageRep? {
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width * scale),
+            pixelsHigh: Int(size.height * scale),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .calibratedRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            return nil
+        }
+        rep.size = size
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = context
+        draw(metrics, dimmed: dimmed)
+        context.flushGraphics()
+        NSGraphicsContext.current = previous
+        return rep
+    }
+
+    private static func draw(_ metrics: [MenuBarMetric], dimmed: Bool) {
+        let count = metrics.count
+        guard count > 0 else { return }
+        let rect = NSRect(origin: .zero, size: size)
+        let gap: CGFloat = 2.25
+        let columnWidth = (rect.width - gap * CGFloat(count - 1)) / CGFloat(count)
+        let radius = min(columnWidth / 2, 1.4)
+        let trackColor = NSColor.labelColor.withAlphaComponent(dimmed ? 0.10 : 0.20)
+        for (index, metric) in metrics.enumerated() {
+            let x = CGFloat(index) * (columnWidth + gap)
+            trackColor.setFill()
+            NSBezierPath(
+                roundedRect: NSRect(x: x, y: 0, width: columnWidth, height: rect.height),
+                xRadius: radius,
+                yRadius: radius
+            ).fill()
+            guard let fraction = metric.fraction, fraction > 0 else { continue }
+            NSColor(metric.tint)
+                .withAlphaComponent(dimmed ? 0.25 : 1)
+                .setFill()
+            NSBezierPath(
+                roundedRect: NSRect(x: x, y: 0, width: columnWidth, height: max(2.5, rect.height * fraction)),
+                xRadius: radius,
+                yRadius: radius
+            ).fill()
+        }
+    }
+}
+
 extension UsageStore {
-    var menuBarText: String {
-        var parts: [String] = []
-        if showQoderInMenuBar { parts.append("Q \(qoderText)") }
-        if showWorkBuddyInMenuBar { parts.append("W \(workbuddyText)") }
-        if showCodexInMenuBar { parts.append("C \(codexText)") }
-        return parts.isEmpty ? "AI" : parts.joined(separator: "   ")
+    var menuBarMetrics: [MenuBarMetric] {
+        var metrics: [MenuBarMetric] = []
+        if showQoderInMenuBar {
+            let ok = qoder?.ok == true
+            let remaining: Double? = ok ? qoder?.remaining : nil
+            let total = ok ? (qoder?.total ?? 0) : 0
+            let percent = percentOf(remaining, over: total)
+            metrics.append(MenuBarMetric(
+                letter: "Q",
+                value: remaining.map { Format.credits($0) } ?? "--",
+                compact: remaining.map { Format.compact($0) } ?? "--",
+                percent: percent.map { Format.percent($0) } ?? "--",
+                fraction: fractionOf(percent),
+                tint: Theme.qoder
+            ))
+        }
+        if showWorkBuddyInMenuBar {
+            let ok = workbuddy?.ok == true
+            let remaining: Double? = ok ? workbuddy?.remaining : nil
+            let percent = percentOf(remaining, over: ok ? (workbuddy?.total ?? 0) : 0)
+            metrics.append(MenuBarMetric(
+                letter: "W",
+                value: remaining.map { Format.credits($0) } ?? "--",
+                compact: remaining.map { Format.compact($0) } ?? "--",
+                percent: percent.map { Format.percent($0) } ?? "--",
+                fraction: fractionOf(percent),
+                tint: Theme.workbuddy
+            ))
+        }
+        if showCodexInMenuBar {
+            let window = codex?.ok == true ? codex?.primaryWindow : nil
+            let percent = window?.remainingPercent
+            let text = percent.map { Format.percent($0) } ?? "--"
+            metrics.append(MenuBarMetric(
+                letter: "C",
+                value: text,
+                compact: text,
+                percent: text,
+                fraction: fractionOf(percent),
+                tint: Theme.codex
+            ))
+        }
+        return metrics
+    }
+
+    func menuBarText(for style: MenuBarStyle) -> String {
+        let metrics = menuBarMetrics
+        guard !metrics.isEmpty else { return "AI" }
+        switch style {
+        case .classic:
+            return metrics.map { "\($0.letter) \($0.value)" }.joined(separator: "   ")
+        case .compact:
+            return metrics.map { "\($0.letter)\($0.compact)" }.joined(separator: " ")
+        case .bars:
+            return metrics.map(\.percent).joined(separator: " ")
+        }
+    }
+
+    var menuBarText: String { menuBarText(for: menuBarStyle) }
+
+    private func percentOf(_ remaining: Double?, over total: Double) -> Double? {
+        guard let remaining, total > 0 else { return nil }
+        return remaining / total * 100
+    }
+
+    private func fractionOf(_ percent: Double?) -> Double? {
+        percent.map { min(max($0 / 100, 0), 1) }
     }
 
     var menuBarTooltip: String {
@@ -2135,24 +2301,6 @@ extension UsageStore {
         return forecast.text
     }
 
-    private var qoderText: String {
-        guard let qoder, qoder.ok == true, let remaining = qoder.remaining, (qoder.total ?? 0) > 0 else {
-            return "--"
-        }
-        return Format.credits(remaining)
-    }
-
-    private var workbuddyText: String {
-        guard let workbuddy, workbuddy.ok == true, let remaining = workbuddy.remaining else {
-            return "--"
-        }
-        return Format.credits(remaining)
-    }
-
-    private var codexText: String {
-        guard let codex, codex.ok == true, let window = codex.primaryWindow else { return "--" }
-        return Format.percent(window.remainingPercent)
-    }
 }
 
 struct MenuContent: View {
@@ -2976,6 +3124,11 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var menuBarSettings: some View {
+        settingRow("样式") {
+            ForEach(MenuBarStyle.allCases) { style in
+                styleChip(style)
+            }
+        }
         settingRow("菜单栏") {
             settingChip(
                 "Qoder",
@@ -3099,6 +3252,32 @@ struct MenuContent: View {
             )
         )
         .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
+    }
+
+    private func styleChip(_ style: MenuBarStyle) -> some View {
+        let selected = store.menuBarStyle == style
+        return Button {
+            store.menuBarStyle = style
+        } label: {
+            Text(style.title)
+                .font(.system(size: 10, weight: selected ? .semibold : .regular))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .fixedSize()
+                .foregroundStyle(selected ? Theme.qoder : Color.secondary)
+                .background(
+                    Capsule().fill(selected ? Theme.qoder.opacity(0.14) : Token.insetFill)
+                )
+                .overlay(
+                    Capsule().stroke(
+                        selected ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
+                        lineWidth: Token.hairline
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .help("菜单栏显示 \(style.sample)")
     }
 
     private func settingChip(

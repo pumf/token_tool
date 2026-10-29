@@ -191,6 +191,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             color = kind == .warning ? .systemRed : .systemOrange
             if blinkDimmed { color = color.withAlphaComponent(0.25) }
         }
+        if store.menuBarStyle == .bars, !store.menuBarMetrics.isEmpty {
+            button.image = MenuBarGlyph.bars(store.menuBarMetrics, dimmed: blinkDimmed)
+            button.imagePosition = .imageLeading
+            button.imageScaling = .scaleNone
+        } else {
+            button.image = nil
+            button.imagePosition = .noImage
+        }
         button.attributedTitle = NSAttributedString(
             string: text,
             attributes: [
