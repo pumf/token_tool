@@ -6,6 +6,18 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 当前版本：**1.4.9**（build 15） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
+## 界面预览
+
+> 以下截图使用演示数据，不含真实账号与用量；实际套餐、数值与重置时间随账号而变。
+
+| 面板（浅色） | 面板（深色） |
+| --- | --- |
+| <img src="docs/screenshots/panel-light.png" width="380" alt="浅色面板：三家额度、今日消耗、7 日趋势与耗尽预测"> | <img src="docs/screenshots/panel-dark.png" width="380" alt="深色面板"> |
+
+| 设置面板 | 额度告警 |
+| --- | --- |
+| <img src="docs/screenshots/settings-light.png" width="380" alt="齿轮展开后的菜单栏显示、提醒、智能预警与阈值设置"> | <img src="docs/screenshots/alert-light.png" width="380" alt="面板顶部关注摘要条：WorkBuddy 剩余 13% 的低额度告警"> |
+
 ## 功能
 
 - **菜单栏常驻**：紧凑显示三家的关键指标（Qoder 剩余积分、WorkBuddy 剩余积分、Codex 已用比例），带完整 tooltip。
@@ -260,6 +272,7 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
 ├── build.sh             # arm64 / x86_64 / 通用版本构建与 ad-hoc 签名
 ├── package.sh           # 产出六个安装包与 SHA256SUMS 校验文件
+├── docs/screenshots/    # README 界面截图（演示数据）
 └── README.md
 ```
 
