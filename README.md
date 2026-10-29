@@ -8,7 +8,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 ## 界面预览
 
-> 以下截图使用演示数据，不含真实账号与用量；实际套餐、数值与重置时间随账号而变。
+> 以下截图使用演示数据，不含真实账号与用量；实际套餐、数值与重置时间随账号而变。面板为真实视图的离屏渲染；菜单栏条按应用同一套字体与配色渲染（应用本身无法截取系统菜单栏）。
 
 | 面板（浅色） | 面板（深色） |
 | --- | --- |
@@ -17,6 +17,12 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 | 设置面板 | 额度告警 |
 | --- | --- |
 | <img src="docs/screenshots/settings-light.png" width="380" alt="齿轮展开后的菜单栏显示、提醒、智能预警与阈值设置"> | <img src="docs/screenshots/alert-light.png" width="380" alt="面板顶部关注摘要条：WorkBuddy 剩余 13% 的低额度告警"> |
+
+菜单栏文字随状态变化：正常、低额度告警（红 `⚠`）、今日待领取（橙 `＋`）、告警闪烁的暗帧，以及三家全部隐藏时的 `AI` 入口。
+
+| 菜单栏（浅色） | 菜单栏（深色） |
+| --- | --- |
+| <img src="docs/screenshots/menubar-light.png" width="470" alt="浅色菜单栏五种状态"> | <img src="docs/screenshots/menubar-dark.png" width="470" alt="深色菜单栏五种状态"> |
 
 ## 功能
 
