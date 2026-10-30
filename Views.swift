@@ -2402,7 +2402,7 @@ struct MenuContent: View {
                 isOn: $store.simpleMode,
                 iconOn: "rectangle.compress.vertical",
                 iconOff: "rectangle.expand.vertical",
-                help: "简单模式：三个平台只显示主要用量，隐藏洞察、预测与更新时间"
+                help: "简单模式：三个平台只显示主要用量与今日消耗，隐藏预测与更新时间"
             )
             Button {
                 settingsExpanded.toggle()
@@ -2666,6 +2666,7 @@ struct MenuContent: View {
         ) {
             if store.simpleMode {
                 qoderPrimaryBar
+                simpleTodayRow(.qoder)
             } else if let qoder = store.qoder {
                 let addonTotal = qoder.addonTotal ?? 0
                 let addonUsed = qoder.addonUsed ?? 0
@@ -2759,6 +2760,7 @@ struct MenuContent: View {
         ) {
             if store.simpleMode {
                 workbuddyPrimaryBar
+                simpleTodayRow(.workbuddy)
             } else if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
                 UsageBar(
                     label: "Credits",
@@ -2824,6 +2826,7 @@ struct MenuContent: View {
         ) {
             if store.simpleMode {
                 codexPrimaryBar
+                simpleTodayRow(.codex)
             } else if let codex = store.codex {
                 if let windows = codex.windows, !windows.isEmpty {
                     ForEach(windows) { window in
@@ -2924,6 +2927,22 @@ struct MenuContent: View {
             }
             .foregroundStyle(.secondary)
             .help("按本机历史采样估算，领取或重置带来的增加不计入消耗；日均需至少 6 小时样本，已观察 \(insight.observedDays) 天。")
+        }
+    }
+
+    @ViewBuilder
+    private func simpleTodayRow(_ provider: UsageProvider) -> some View {
+        if let insight = store.insight(for: provider), let today = insight.todayConsumed {
+            HStack(spacing: 5) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("今日消耗 \(insightValue(today, percent: insight.isPercent))")
+                    .font(Token.meta)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.secondary)
+            .help("按本机历史采样估算，领取或重置带来的增加不计入消耗。")
         }
     }
 
@@ -3117,7 +3136,7 @@ struct MenuContent: View {
                 isOn: $store.simpleMode,
                 iconOn: "rectangle.compress.vertical",
                 iconOff: "rectangle.expand.vertical",
-                help: "三个平台只显示主要用量，隐藏洞察、预测与更新时间"
+                help: "三个平台只显示主要用量与今日消耗，隐藏预测与更新时间"
             )
         }
     }
