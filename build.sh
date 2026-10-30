@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 BUILD="build"
+mkdir -p "$BUILD"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
 UNIVERSAL_APP="$BUILD/TokenTool.app"
 ARM_APP="$BUILD/TokenTool-arm64.app"
