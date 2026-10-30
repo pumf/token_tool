@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 回归测试
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift 版本
+        run: swift --version
+      - name: Analytics 回归测试
+        run: ./test.sh
+
+  package:
+    name: 三架构打包
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建
+        run: ./build.sh
+      - name: 打包六个安装包
+        run: ./package.sh
+      - name: 校验清单
+        run: |
+          cd build/dist
+          shasum -a 256 -c SHA256SUMS
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: TokenTool-${{ github.sha }}
+          path: |
+            build/dist/*.dmg
+            build/dist/*.zip
+            build/dist/SHA256SUMS
+          if-no-files-found: error
