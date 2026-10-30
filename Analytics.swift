@@ -5,13 +5,7 @@ enum UsageProvider: String, Sendable, CaseIterable {
     case workbuddy
     case codex
 
-    var displayName: String {
-        switch self {
-        case .qoder: return "Qoder"
-        case .workbuddy: return "WorkBuddy"
-        case .codex: return "Codex"
-        }
-    }
+    // 显示名、图标、颜色等静态信息见 Providers.swift 的注册表。
 }
 
 struct UsageWindow: Sendable {
@@ -78,8 +72,6 @@ enum UsageAnalytics {
     static let historyRetentionDays = 14
     static let chartDays = 7
     static let sampleInterval: TimeInterval = 300
-    /// Qoder 走 CLI 采集（单次约 5 秒），间隔比本地 IPC 的两家长，但不能长到领取后要等几分钟才刷新。
-    static let qoderRefreshInterval: TimeInterval = 90
     static let maxSamplesPerProvider = 4500
     static let defaultLowThreshold = 20.0
     static let lowRecoveryGap = 5.0
@@ -104,8 +96,8 @@ enum UsageAnalytics {
     private static let day: TimeInterval = 86400
 
     static func currentPercent(provider: UsageProvider, input: UsageInput) -> Double? {
-        switch provider {
-        case .qoder, .workbuddy:
+        switch provider.quotaKind {
+        case .credits:
             if let percent = input.remainingPercent, percent.isFinite {
                 return clamp(percent)
             }
@@ -114,7 +106,7 @@ enum UsageAnalytics {
                   total > 0,
                   remaining.isFinite else { return nil }
             return clamp(remaining * 100 / total)
-        case .codex:
+        case .percentWindow:
             return lowestWindow(of: input)?.remainingPercent
         }
     }
@@ -137,7 +129,7 @@ enum UsageAnalytics {
             )
         }
         let percent: Double?
-        if provider == .codex {
+        if provider.quotaKind == .percentWindow {
             percent = input.windows.first?.remainingPercent
         } else {
             percent = currentPercent(provider: provider, input: input)
@@ -145,8 +137,8 @@ enum UsageAnalytics {
         guard percent != nil || !windows.isEmpty else { return nil }
         return UsageSample(
             at: Int(date.timeIntervalSince1970),
-            remaining: provider == .codex ? nil : input.remaining,
-            total: provider == .codex ? nil : input.total,
+            remaining: provider.isPercent ? nil : input.remaining,
+            total: provider.isPercent ? nil : input.total,
             remainingPercent: percent,
             windows: windows.isEmpty ? nil : windows
         )
@@ -170,8 +162,8 @@ enum UsageAnalytics {
         now: Date = Date(),
         lowThreshold: Double = defaultLowThreshold
     ) -> UsageForecast? {
-        switch provider {
-        case .qoder, .workbuddy:
+        switch provider.quotaKind {
+        case .credits:
             return creditForecast(
                 provider: provider,
                 input: input,
@@ -179,8 +171,8 @@ enum UsageAnalytics {
                 now: now,
                 lowThreshold: lowThreshold
             )
-        case .codex:
-            return codexForecast(
+        case .percentWindow:
+            return windowForecast(
                 input: input,
                 samples: samples,
                 now: now,
@@ -201,13 +193,13 @@ enum UsageAnalytics {
         let todayStart = calendar.startOfDay(for: now).timeIntervalSince1970
 
         var points: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
-        switch provider {
-        case .qoder, .workbuddy:
+        switch provider.quotaKind {
+        case .credits:
             for sample in samples {
                 guard Double(sample.at) >= windowStart, let remaining = sample.remaining else { continue }
                 points.append((Double(sample.at), remaining, sample.total, nil))
             }
-        case .codex:
+        case .percentWindow:
             guard let primary = input.windows.first else { return nil }
             for sample in samples {
                 guard Double(sample.at) >= windowStart,
@@ -237,7 +229,7 @@ enum UsageAnalytics {
                abs(previousTotal - currentTotal) > 0.5 {
                 continue
             }
-            if provider == .codex,
+            if provider.isPercent,
                let previousReset = previous.reset,
                let currentReset = current.reset,
                previousReset != currentReset {
@@ -254,7 +246,7 @@ enum UsageAnalytics {
                 } else {
                     todayConsumed += consumed
                 }
-            } else if consumed < 0, provider != .codex {
+            } else if consumed < 0, !provider.isPercent {
                 totalReclaimed -= consumed
             }
         }
@@ -271,7 +263,7 @@ enum UsageAnalytics {
             dailyAverage: dailyAverage,
             netDailyAverage: netDailyAverage,
             observedDays: observedDays,
-            isPercent: provider == .codex
+            isPercent: provider.isPercent
         )
     }
 
@@ -416,7 +408,7 @@ enum UsageAnalytics {
         return max(0, total * percent / 100)
     }
 
-    private static func codexForecast(
+    private static func windowForecast(
         input: UsageInput,
         samples: [UsageSample],
         now: Date,
@@ -602,13 +594,13 @@ enum UsageAnalytics {
         input: UsageInput,
         samples: [UsageSample]
     ) -> [(at: Double, value: Double)] {
-        switch provider {
-        case .qoder, .workbuddy:
+        switch provider.quotaKind {
+        case .credits:
             return samples.compactMap { sample in
                 guard let percent = sample.remainingPercent else { return nil }
                 return (Double(sample.at), percent)
             }
-        case .codex:
+        case .percentWindow:
             guard let primary = input.windows.first else { return [] }
             var points: [(at: Double, value: Double)] = []
             for sample in samples {

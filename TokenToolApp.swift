@@ -34,31 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureNotificationCategories(_ center: UNUserNotificationCenter) {
-        let qoder = UNNotificationCategory(
-            identifier: NotificationCategory.qoder,
-            actions: [
-                UNNotificationAction(identifier: "open.qoder", title: "打开 Qoder", options: [])
-            ],
-            intentIdentifiers: [],
-            options: []
-        )
-        let workbuddy = UNNotificationCategory(
-            identifier: NotificationCategory.workbuddy,
-            actions: [
-                UNNotificationAction(identifier: "open.workbuddy", title: "打开 WorkBuddy", options: [])
-            ],
-            intentIdentifiers: [],
-            options: []
-        )
-        let codex = UNNotificationCategory(
-            identifier: NotificationCategory.codex,
-            actions: [
-                UNNotificationAction(identifier: "open.codex", title: "打开 ChatGPT", options: [])
-            ],
-            intentIdentifiers: [],
-            options: []
-        )
-        center.setNotificationCategories([qoder, workbuddy, codex])
+        center.setNotificationCategories(Set(Providers.ordered.map { descriptor in
+            UNNotificationCategory(
+                identifier: NotificationCategory.forProvider(descriptor.id),
+                actions: [
+                    UNNotificationAction(
+                        identifier: NotificationCategory.openAction(for: descriptor.id),
+                        title: "打开 \(descriptor.clientName)",
+                        options: []
+                    ),
+                ],
+                intentIdentifiers: [],
+                options: []
+            )
+        }))
     }
 }
 
@@ -78,15 +67,10 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     ) {
         let category = response.notification.request.content.categoryIdentifier
         DispatchQueue.main.async {
-            switch category {
-            case NotificationCategory.qoder:
-                Apps.open(bundleID: "com.qodercn.app", fallback: "/Applications/Qoder CN.app")
-            case NotificationCategory.workbuddy:
-                Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
-            case NotificationCategory.codex:
-                Apps.open(bundleID: "com.openai.codex", fallback: "/Applications/ChatGPT.app")
-            default:
-                break
+            if let descriptor = Providers.ordered.first(where: {
+                NotificationCategory.forProvider($0.id) == category
+            }) {
+                Apps.open(bundleID: descriptor.clientBundleID, fallback: descriptor.clientAppPath)
             }
         }
         completionHandler()
@@ -173,7 +157,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.resizeIfNeeded()
         }
-        store.refreshQoderIfStale()
+        store.refreshStaleForPanel()
     }
 
     func popoverDidClose(_ notification: Notification) {

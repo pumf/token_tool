@@ -1,6 +1,6 @@
 import Foundation
 
-// Analytics 纯函数的回归测试。
+// Analytics 纯函数、供应商注册表、本地数据格式与 CSV 导出的回归测试。
 //
 // 本机只有 CommandLineTools（没有 Xcode，XCTest 与 swift-testing 都不可用），
 // 因此测试与源码一起用 swiftc 编译成可执行文件，由 ./test.sh 运行。
@@ -130,6 +130,9 @@ struct AnalyticsSuite {
         runRampRates()
         runFormatting()
         runSample()
+        runRegistry()
+        runPersistence()
+        runExport()
 
         print("\n\(checks) 项断言，\(failures) 项失败")
         exit(failures == 0 ? 0 : 1)
@@ -470,5 +473,216 @@ struct AnalyticsSuite {
             let input = UsageInput(remaining: nil, total: nil, remainingPercent: nil, windows: [])
             expectNil(UsageAnalytics.sample(provider: .qoder, input: input, at: noon))
         }
+    }
+
+    // MARK: 供应商注册表
+
+    /// 注册表承担的是「行为等价的旧代码」这件事，所以断言写的都是重构前已经存在的
+    /// 顺序、节奏与键名，而不是注册表自创的约定。
+    static func runRegistry() {
+        test("枚举里的供应商都有注册条目") {
+            expectEqual(Providers.all.count, UsageProvider.allCases.count)
+            for provider in UsageProvider.allCases {
+                expectEqual(Providers.descriptor(provider).id, provider)
+            }
+        }
+        test("采集键与开关键名互不重复") {
+            expectEqual(Set(Providers.all.map(\.collectorKey)).count, Providers.all.count)
+            expectEqual(Set(Providers.all.map(\.menuBarDefaultsKey)).count, Providers.all.count)
+            expectEqual(Set(Providers.all.map(\.reminderDefaultsKey)).count, Providers.all.count)
+        }
+        test("面板展示顺序仍是 Qoder / WorkBuddy / Codex") {
+            expectEqual(Providers.ordered.map(\.id), [.qoder, .workbuddy, .codex])
+        }
+        test("额度口径归属") {
+            expectEqual(Providers.descriptor(.qoder).quotaKind, .credits)
+            expectEqual(Providers.descriptor(.workbuddy).quotaKind, .credits)
+            expectEqual(Providers.descriptor(.codex).quotaKind, .percentWindow)
+            expectEqual(Providers.all.filter(\.isPercent).map(\.id), [UsageProvider.codex])
+        }
+        test("既有的 UserDefaults 键名保持不变") {
+            expectEqual(Providers.descriptor(.qoder).menuBarDefaultsKey, "menuBar.qoder")
+            expectEqual(Providers.descriptor(.workbuddy).menuBarDefaultsKey, "menuBar.workbuddy")
+            expectEqual(Providers.descriptor(.codex).menuBarDefaultsKey, "menuBar.codex")
+            expectEqual(Providers.descriptor(.qoder).reminderDefaultsKey, "reminder.qoder.claim")
+            expectEqual(Providers.descriptor(.workbuddy).reminderDefaultsKey, "reminder.workbuddy.claim")
+            expectEqual(Providers.descriptor(.codex).reminderDefaultsKey, "reminder.codex.reset")
+        }
+        test("刷新分组沿用旧的两档节奏与采集顺序") {
+            let groups = Providers.groups
+            expectEqual(groups.count, 2)
+            // 60 秒一档里 Codex 的超时预算更大，所以仍然先起 Codex、再起 WorkBuddy。
+            expectEqual(groups[0].interval, 60.0)
+            expectEqual(groups[0].providers, [.codex, .workbuddy])
+            expectEqual(groups[1].interval, 90.0)
+            expectEqual(groups[1].providers, [UsageProvider.qoder])
+            expectEqual(groups.flatMap(\.providers).count, Providers.all.count)
+        }
+        test("只有采集最慢的 Qoder 在面板展开时补采") {
+            expectEqual(Providers.panelRefreshProviders, [UsageProvider.qoder])
+        }
+        test("登录引导只挂在需要 CLI 的供应商上") {
+            let needingSetup = Providers.all.filter { descriptor in
+                if case .qoderCLI = descriptor.setup { return true }
+                return false
+            }
+            expectEqual(needingSetup.map(\.id), [UsageProvider.qoder])
+        }
+        test("每日领取提醒的时间与额度") {
+            for descriptor in Providers.all {
+                guard case let .daily(hour, grant, _) = descriptor.claimReminder else { continue }
+                switch descriptor.id {
+                case .qoder:
+                    expectEqual(hour, 10)
+                    expectEqual(grant, "100 Credits")
+                case .workbuddy:
+                    expectEqual(hour, 0)
+                    expectEqual(grant, "100 积分")
+                case .codex:
+                    check(false, "Codex 不该有每日领取提醒")
+                }
+            }
+        }
+        test("通知分类标识保持旧字符串") {
+            expectEqual(NotificationCategory.forProvider(.qoder), "provider.qoder")
+            expectEqual(NotificationCategory.forProvider(.workbuddy), "provider.workbuddy")
+            expectEqual(NotificationCategory.forProvider(.codex), "provider.codex")
+            expectEqual(NotificationCategory.openAction(for: .codex), "open.codex")
+            expectEqual(NotificationCategory.all.count, Providers.ordered.count)
+        }
+    }
+
+    // MARK: 本地数据格式
+
+    static func runPersistence() {
+        test("v1 缓存：固定三家键，Codex 与 WorkBuddy 共用快刷时间") {
+            let snapshot = LocalData.decodeCache(data("""
+            {"codex":{"ok":true,"updatedAt":100},"workbuddy":{"ok":true,"updatedAt":100},
+             "qoder":{"ok":true,"updatedAt":90,"remaining":1870,"total":2600},
+             "fastAt":100,"qoderAt":90}
+            """))
+            expectEqual(snapshot?.results[.qoder]?.remaining, 1870)
+            expectEqual(snapshot?.collectedAt[.codex], Date(timeIntervalSince1970: 100))
+            expectEqual(snapshot?.collectedAt[.workbuddy], Date(timeIntervalSince1970: 100))
+            expectEqual(snapshot?.collectedAt[.qoder], Date(timeIntervalSince1970: 90))
+        }
+        test("v1 缓存：缺某一家就只读到有的几家") {
+            let snapshot = LocalData.decodeCache(data(#"{"qoder":{"ok":true,"total":500},"qoderAt":90}"#))
+            expectEqual(snapshot?.results.count, 1)
+            expectEqual(snapshot?.results[.qoder]?.total, 500)
+            expectEqual(snapshot?.collectedAt.count, 1)
+        }
+        test("v2 缓存：按供应商键读取结果与采集时间") {
+            let snapshot = LocalData.decodeCache(data("""
+            {"version":2,"providers":{"qoder":{"ok":true,"remaining":120}},
+             "lastAt":{"qoder":1600,"codex":1700}}
+            """))
+            expectEqual(snapshot?.results[.qoder]?.remaining, 120)
+            expectEqual(snapshot?.collectedAt[.qoder], Date(timeIntervalSince1970: 1600))
+            expectEqual(snapshot?.collectedAt[.codex], Date(timeIntervalSince1970: 1700))
+        }
+        test("v2 缓存：未注册的供应商键被忽略") {
+            // 这条会往诊断日志里落一行「忽略未注册的供应商缓存」，属于预期行为。
+            let snapshot = LocalData.decodeCache(data(
+                #"{"version":2,"providers":{"someone":{"ok":true,"remaining":1}}"#
+                    + #","lastAt":{"someone":1600}}"#
+            ))
+            expectEqual(snapshot?.results.count, 0)
+            expectEqual(snapshot?.collectedAt.count, 0)
+        }
+        test("v2 缓存：写出带版本号，读回来数值不变") {
+            let original = LocalData.decodeCache(data(
+                #"{"version":2,"providers":{"workbuddy":{"ok":true,"remaining":42,"total":100}}"#
+                    + #","lastAt":{"workbuddy":1600}}"#
+            ))!
+            let encoded = LocalData.encodeCache(original)!
+            expectContains(String(data: encoded, encoding: .utf8)!, #""version":2"#)
+            let restored = LocalData.decodeCache(encoded)
+            expectEqual(restored?.results[.workbuddy]?.remaining, 42)
+            expectEqual(restored?.collectedAt[.workbuddy], Date(timeIntervalSince1970: 1600))
+        }
+        test("v1 历史：固定三家键") {
+            let snapshot = LocalData.decodeHistory(data("""
+            {"qoder":[{"at":100,"remaining":1870,"total":2600,"remainingPercent":71.9}],
+             "codex":[{"at":120,"remainingPercent":58,"windows":[{"minutes":300,
+                "remainingPercent":58,"usedPercent":42,"resetsAt":130}]}]}
+            """))
+            expectEqual(snapshot?.samples[.qoder]?.count, 1)
+            expectEqual(snapshot?.samples[.qoder]?.first?.remaining, 1870)
+            expectEqual(snapshot?.samples[.codex]?.first?.windows?.first?.minutes, 300)
+            expectEqual(snapshot?.samples[.workbuddy]?.count, 0)
+        }
+        test("v2 历史：未注册的供应商键被忽略，其余照常读出") {
+            let snapshot = LocalData.decodeHistory(data(
+                #"{"version":2,"providers":{"qoder":[{"at":100,"remaining":10,"total":20,"remainingPercent":50}],"someone":[]}}"#
+            ))
+            expectEqual(snapshot?.samples.count, 1)
+            expectEqual(snapshot?.samples[.qoder]?.first?.total, 20)
+        }
+        test("v2 历史：写出带版本号并按注册表补齐每一家") {
+            let original = LocalData.decodeHistory(data(
+                #"{"version":2,"providers":{"codex":[{"at":100,"remainingPercent":30}]}}"#
+            ))!
+            let encoded = LocalData.encodeHistory(original)!
+            let text = String(data: encoded, encoding: .utf8)!
+            expectContains(text, #""version":2"#)
+            for key in ["qoder", "workbuddy", "codex"] {
+                expectContains(text, "\"\(key)\":")
+            }
+            expectEqual(LocalData.decodeHistory(encoded)?.samples[.codex]?.first?.remainingPercent, 30)
+        }
+        test("读不出来的文件返回 nil，交给上层回退备份") {
+            expectNil(LocalData.decodeCache(data("not json at all")))
+            expectNil(LocalData.decodeHistory(data("{")))
+        }
+    }
+
+    // MARK: CSV 导出
+
+    static func runExport() {
+        test("表头与列结构保持不变") {
+            let text = UsageExport.csv([:])
+            expectEqual(
+                text.split(separator: "\n").map(String.init)[0],
+                "provider,timestamp,remaining,total,remaining_percent,"
+                    + "window_minutes,window_remaining_percent,window_used_percent,resets_at"
+            )
+            expectEqual(text, "provider,timestamp,remaining,total,remaining_percent,"
+                + "window_minutes,window_remaining_percent,window_used_percent,resets_at\n")
+        }
+        test("按注册表顺序导出，字典顺序不影响行序") {
+            let samples: [UsageProvider: [UsageSample]] = [
+                .codex: [UsageSample(
+                    at: 1_700_000_000,
+                    remaining: nil,
+                    total: nil,
+                    remainingPercent: 58,
+                    windows: [WindowUsageSample(
+                        minutes: 300,
+                        remainingPercent: 58,
+                        usedPercent: 42,
+                        resetsAt: 1_700_001_800
+                    )]
+                )],
+                .qoder: [UsageSample(
+                    at: 1_700_000_000,
+                    remaining: 1870,
+                    total: 2600,
+                    remainingPercent: 71.92,
+                    windows: nil
+                )],
+            ]
+            let rows = UsageExport.csv(samples).split(separator: "\n").map(String.init)
+            expectEqual(rows.count, 3)
+            check(rows[1].hasPrefix("qoder,"), "第二行应是 Qoder，实际「\(rows[1])」")
+            expectContains(rows[1], "1870.00")
+            expectContains(rows[1], "2600.00")
+            check(rows[2].hasPrefix("codex,"), "第三行应是 Codex，实际「\(rows[2])」")
+            expectContains(rows[2], ",300,58.00,42.00,")
+        }
+    }
+
+    private static func data(_ text: String) -> Data {
+        Data(text.utf8)
     }
 }

@@ -175,17 +175,19 @@ struct CollectorAction: Decodable, Sendable {
     let error: String?
 }
 
+/// 通知分类与「打开客户端」按钮的标识符。旧版本按供应商手写，这里改成从枚举原值派生，
+/// 保持既有字符串不变（provider.qoder / open.qoder ...），已发出的通知仍可正常响应。
 enum NotificationCategory {
-    static let qoder = "provider.qoder"
-    static let workbuddy = "provider.workbuddy"
-    static let codex = "provider.codex"
-
     static func forProvider(_ provider: UsageProvider) -> String {
-        switch provider {
-        case .qoder: return qoder
-        case .workbuddy: return workbuddy
-        case .codex: return codex
-        }
+        "provider.\(provider.rawValue)"
+    }
+
+    static func openAction(for provider: UsageProvider) -> String {
+        "open.\(provider.rawValue)"
+    }
+
+    static var all: [String] {
+        Providers.ordered.map { forProvider($0.id) }
     }
 }
 
@@ -422,44 +424,21 @@ struct AttentionItem: Identifiable, Sendable {
 
 @MainActor
 final class UsageStore: ObservableObject {
-    @Published private(set) var codex: ProviderResult?
-    @Published private(set) var workbuddy: ProviderResult?
-    @Published private(set) var qoder: ProviderResult?
-    @Published private(set) var codexError: String?
-    @Published private(set) var workbuddyError: String?
-    @Published private(set) var qoderError: String?
-    @Published private(set) var fastRefreshing = false
-    @Published private(set) var qoderRefreshing = false
-    @Published private(set) var lastFastAt: Date?
-    @Published private(set) var lastQoderAt: Date?
+    /// 一家供应商的运行态。名称、口径、采集节奏、客户端等静态属性都在 Providers 注册表里，
+    /// 这里只按供应商索引保存会随采集变化的数据。
+    struct ProviderState {
+        var result: ProviderResult?
+        var error: String?
+        var history: [UsageSample] = []
+        var lastCollectedAt: Date?
+        var isRefreshing = false
+    }
+
+    @Published private var states: [UsageProvider: ProviderState] = [:]
+    /// 菜单栏显示与领取提醒的开关；落盘键名由注册表登记，保持与旧版本一致。
+    @Published private var menuBarVisibility: [UsageProvider: Bool] = [:]
+    @Published private var reminderVisibility: [UsageProvider: Bool] = [:]
     @Published private(set) var launchAtLogin = LaunchAtLogin.isEnabled
-    @Published var showQoderInMenuBar: Bool {
-        didSet { UserDefaults.standard.set(showQoderInMenuBar, forKey: "menuBar.qoder") }
-    }
-    @Published var showWorkBuddyInMenuBar: Bool {
-        didSet { UserDefaults.standard.set(showWorkBuddyInMenuBar, forKey: "menuBar.workbuddy") }
-    }
-    @Published var showCodexInMenuBar: Bool {
-        didSet { UserDefaults.standard.set(showCodexInMenuBar, forKey: "menuBar.codex") }
-    }
-    @Published var remindQoderClaim: Bool {
-        didSet {
-            UserDefaults.standard.set(remindQoderClaim, forKey: "reminder.qoder.claim")
-            reminderSettingChanged()
-        }
-    }
-    @Published var remindWorkBuddyClaim: Bool {
-        didSet {
-            UserDefaults.standard.set(remindWorkBuddyClaim, forKey: "reminder.workbuddy.claim")
-            reminderSettingChanged()
-        }
-    }
-    @Published var remindCodexReset: Bool {
-        didSet {
-            UserDefaults.standard.set(remindCodexReset, forKey: "reminder.codex.reset")
-            reminderSettingChanged()
-        }
-    }
     @Published var alertLowBalance: Bool {
         didSet {
             UserDefaults.standard.set(alertLowBalance, forKey: "alert.low")
@@ -503,31 +482,8 @@ final class UsageStore: ObservableObject {
     @Published private(set) var attentionSince: Date?
     @Published private(set) var mutedUntil: Date?
     @Published private(set) var notificationsDenied = false
-    @Published private var qoderHistory: [UsageSample] = []
-    @Published private var workbuddyHistory: [UsageSample] = []
-    @Published private var codexHistory: [UsageSample] = []
-
-    private enum ReminderID {
-        static let qoder = "reminder.qoder.claim"
-        static let workbuddy = "reminder.workbuddy.claim"
-        static let codex = "reminder.codex.reset"
-    }
 
     private lazy var notificationCenter = UNUserNotificationCenter.current()
-
-    private struct CacheFile: Codable {
-        var codex: ProviderResult?
-        var workbuddy: ProviderResult?
-        var qoder: ProviderResult?
-        var fastAt: Double?
-        var qoderAt: Double?
-    }
-
-    private struct HistoryFile: Codable {
-        var qoder: [UsageSample]?
-        var workbuddy: [UsageSample]?
-        var codex: [UsageSample]?
-    }
 
     private static var cacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -545,9 +501,7 @@ final class UsageStore: ObservableObject {
             .appendingPathComponent("TokenTool/history.json.bak")
     }
 
-    private enum Provider: Sendable { case codex, workbuddy, qoder }
-    private var fastTimer: Timer?
-    private var qoderTimer: Timer?
+    private var refreshTimers: [Timer] = []
 
     private static func storedFlag(_ key: String) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? true
@@ -558,13 +512,10 @@ final class UsageStore: ObservableObject {
         return [10, 20, 30].contains(value) ? value : 20
     }
 
+    /// 注册表里的刷新节奏分组，间隔小的排在前面。
+    private static let groups = Providers.groups
+
     init(refreshOnStart: Bool = true) {
-        showQoderInMenuBar = Self.storedFlag("menuBar.qoder")
-        showWorkBuddyInMenuBar = Self.storedFlag("menuBar.workbuddy")
-        showCodexInMenuBar = Self.storedFlag("menuBar.codex")
-        remindQoderClaim = Self.storedFlag("reminder.qoder.claim")
-        remindWorkBuddyClaim = Self.storedFlag("reminder.workbuddy.claim")
-        remindCodexReset = Self.storedFlag("reminder.codex.reset")
         alertLowBalance = Self.storedFlag("alert.low")
         alertExhaustion = Self.storedFlag("alert.exhaustion")
         alertAcceleration = Self.storedFlag("alert.acceleration")
@@ -575,6 +526,11 @@ final class UsageStore: ObservableObject {
         menuBarStyle = MenuBarStyle(rawValue: UserDefaults.standard.string(forKey: "menuBar.style") ?? "") ?? .classic
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
         mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
+        for descriptor in Providers.all {
+            states[descriptor.id] = ProviderState()
+            menuBarVisibility[descriptor.id] = Self.storedFlag(descriptor.menuBarDefaultsKey)
+            reminderVisibility[descriptor.id] = Self.storedFlag(descriptor.reminderDefaultsKey)
+        }
         loadCache()
         loadHistory()
         seedHistoryFromCache()
@@ -584,9 +540,16 @@ final class UsageStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.prepareNotificationAuthorization()
         }
-        refreshFast()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.refreshQoder()
+        // 采集器都是子进程，启动时按分组错峰开跑，避免几家的 python3 同时抢 CPU。
+        for (index, group) in Self.groups.enumerated() {
+            let delay = Double(index) * 1.2
+            if delay == 0 {
+                refresh(group.providers)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.refresh(group.providers)
+                }
+            }
         }
         scheduleTimers()
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -598,7 +561,49 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    var isRefreshing: Bool { fastRefreshing || qoderRefreshing }
+    // MARK: 按供应商索引的运行态
+
+    func result(for provider: UsageProvider) -> ProviderResult? { states[provider]?.result }
+    func error(for provider: UsageProvider) -> String? { states[provider]?.error }
+    func history(for provider: UsageProvider) -> [UsageSample] { states[provider]?.history ?? [] }
+    func lastCollectedAt(for provider: UsageProvider) -> Date? { states[provider]?.lastCollectedAt }
+    func isRefreshing(_ provider: UsageProvider) -> Bool { states[provider]?.isRefreshing ?? false }
+    func isShownInMenuBar(_ provider: UsageProvider) -> Bool { menuBarVisibility[provider] ?? true }
+    func isReminderEnabled(_ provider: UsageProvider) -> Bool { reminderVisibility[provider] ?? true }
+
+    func menuBarBinding(for provider: UsageProvider) -> Binding<Bool> {
+        Binding(
+            get: { self.isShownInMenuBar(provider) },
+            set: { value in
+                self.menuBarVisibility[provider] = value
+                UserDefaults.standard.set(value, forKey: provider.descriptor.menuBarDefaultsKey)
+            }
+        )
+    }
+
+    func reminderBinding(for provider: UsageProvider) -> Binding<Bool> {
+        Binding(
+            get: { self.isReminderEnabled(provider) },
+            set: { value in
+                self.reminderVisibility[provider] = value
+                UserDefaults.standard.set(value, forKey: provider.descriptor.reminderDefaultsKey)
+                self.reminderSettingChanged()
+            }
+        )
+    }
+
+    /// 页脚的采集时间戳：节奏最快的一组沿用的是「刷新」这个叫法，其余按组内供应商名。
+    var refreshSummaries: [(label: String, at: Date?)] {
+        Self.groups.enumerated().map { index, group in
+            let label = index == 0
+                ? "刷新"
+                : group.providers.map(\.displayName).joined(separator: "/")
+            let at = group.providers.compactMap { states[$0]?.lastCollectedAt }.max()
+            return (label, at)
+        }
+    }
+
+    var isRefreshing: Bool { Providers.all.contains { self.isRefreshing($0.id) } }
     var lowThreshold: Double { Double(lowBalanceThreshold) }
     var lowRecovery: Double { lowThreshold + UsageAnalytics.lowRecoveryGap }
 
@@ -651,22 +656,8 @@ final class UsageStore: ObservableObject {
     }
 
     func openClient(_ provider: UsageProvider) {
-        switch provider {
-        case .qoder:
-            Apps.open(bundleID: "com.qodercn.app", fallback: "/Applications/Qoder CN.app")
-        case .workbuddy:
-            Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
-        case .codex:
-            Apps.open(bundleID: "com.openai.codex", fallback: "/Applications/ChatGPT.app")
-        }
-    }
-
-    static func clientName(_ provider: UsageProvider) -> String {
-        switch provider {
-        case .qoder: return "Qoder"
-        case .workbuddy: return "WorkBuddy"
-        case .codex: return "ChatGPT"
-        }
+        let descriptor = provider.descriptor
+        Apps.open(bundleID: descriptor.clientBundleID, fallback: descriptor.clientAppPath)
     }
 
     private static func dayKey(_ date: Date) -> String {
@@ -687,7 +678,7 @@ final class UsageStore: ObservableObject {
         var items: [AttentionItem] = []
         if mutedUntil == nil {
             for provider in UsageProvider.allCases {
-                guard let result = currentResult(for: provider), result.ok == true else { continue }
+                guard let result = availableResult(for: provider) else { continue }
                 let input = usageInput(result)
                 if let item = warningItem(provider: provider, input: input) {
                     items.append(item)
@@ -718,7 +709,7 @@ final class UsageStore: ObservableObject {
                 icon: "exclamationmark.triangle.fill",
                 title: "\(provider.displayName) 剩余 \(Int(percent.rounded()))%",
                 detail: "已低于 \(Int(lowThreshold))% 阈值，请留意消耗或等待额度重置。",
-                actionTitle: "打开 \(Self.clientName(provider))",
+                actionTitle: "打开 \(provider.descriptor.clientName)",
                 canDismiss: false
             )
         }
@@ -728,7 +719,7 @@ final class UsageStore: ObservableObject {
               forecast.text.hasSuffix("后耗尽") else { return nil }
 
         let detail: String
-        if provider == .codex,
+        if provider.isPercent,
            let risk = forecast.windows.filter({ $0.exhaustsBeforeReset })
                .min(by: { $0.exhaustAt < $1.exhaustAt }),
            let reset = risk.resetsAt {
@@ -743,67 +734,60 @@ final class UsageStore: ObservableObject {
             icon: "hourglass",
             title: "\(provider.displayName) \(forecast.text)",
             detail: detail,
-            actionTitle: "打开 \(Self.clientName(provider))",
+            actionTitle: "打开 \(provider.descriptor.clientName)",
             canDismiss: false
         )
     }
 
     private func claimItem(provider: UsageProvider, input: UsageInput, now: Date) -> AttentionItem? {
-        switch provider {
-        case .qoder:
+        guard isReminderEnabled(provider) else { return nil }
+        switch provider.descriptor.claimReminder {
+        case let .daily(hour, grant, _):
             return dailyClaimItem(
-                provider: .qoder,
-                enabled: remindQoderClaim,
-                claimHour: 10,
-                grant: "100 Credits",
+                provider: provider,
+                claimHour: hour,
+                grant: grant,
                 input: input,
                 now: now
             )
-        case .workbuddy:
-            return dailyClaimItem(
-                provider: .workbuddy,
-                enabled: remindWorkBuddyClaim,
-                claimHour: 0,
-                grant: "100 积分",
-                input: input,
-                now: now
-            )
-        case .codex:
-            guard remindCodexReset else { return nil }
-            let nowTs = now.timeIntervalSince1970
-            let upcoming = input.windows.compactMap { item -> (UsageWindow, Int)? in
-                guard let reset = item.resetsAt,
-                      Double(reset) - nowTs > 0,
-                      Double(reset) - nowTs <= 20 * 60 else {
-                    return nil
-                }
-                return (item, reset)
-            }
-            guard let (window, reset) = upcoming.min(by: { $0.1 < $1.1 }) else { return nil }
-            let key = "attention.claim.dismiss.codex"
-            if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
-            return AttentionItem(
-                id: "claim.codex",
-                provider: .codex,
-                kind: .claim,
-                icon: "clock.arrow.circlepath",
-                title: "Codex \(UsageAnalytics.windowText(window.minutes))窗口即将重置",
-                detail: "\(Format.reset(reset)) 刷新额度，重置后可继续使用。",
-                actionTitle: "打开 \(Self.clientName(.codex))",
-                canDismiss: true
-            )
+        case .windowReset:
+            return windowResetClaimItem(provider: provider, input: input, now: now)
         }
+    }
+
+    /// 窗口制没有「领取」动作，改在最近一个限额窗口即将重置时提醒。
+    private func windowResetClaimItem(provider: UsageProvider, input: UsageInput, now: Date) -> AttentionItem? {
+        let nowTs = now.timeIntervalSince1970
+        let upcoming = input.windows.compactMap { item -> (UsageWindow, Int)? in
+            guard let reset = item.resetsAt,
+                  Double(reset) - nowTs > 0,
+                  Double(reset) - nowTs <= 20 * 60 else {
+                return nil
+            }
+            return (item, reset)
+        }
+        guard let (window, reset) = upcoming.min(by: { $0.1 < $1.1 }) else { return nil }
+        let key = "attention.claim.dismiss.\(provider.rawValue)"
+        if UserDefaults.standard.string(forKey: key) == Self.dayKey(now) { return nil }
+        return AttentionItem(
+            id: "claim.\(provider.rawValue)",
+            provider: provider,
+            kind: .claim,
+            icon: "clock.arrow.circlepath",
+            title: "\(provider.displayName) \(UsageAnalytics.windowText(window.minutes))窗口即将重置",
+            detail: "\(Format.reset(reset)) 刷新额度，重置后可继续使用。",
+            actionTitle: "打开 \(provider.descriptor.clientName)",
+            canDismiss: true
+        )
     }
 
     private func dailyClaimItem(
         provider: UsageProvider,
-        enabled: Bool,
         claimHour: Int,
         grant: String,
         input: UsageInput,
         now: Date
     ) -> AttentionItem? {
-        guard enabled else { return nil }
         guard input.remaining != nil, let total = input.total, total > 0 else { return nil }
         guard let claimAt = Calendar.current.date(
             bySettingHour: claimHour, minute: 0, second: 0, of: now
@@ -818,7 +802,7 @@ final class UsageStore: ObservableObject {
             icon: "gift.fill",
             title: "\(provider.displayName) 今日 \(grant) 待领取",
             detail: "领取成功后此提示会自动消失；今天不需要可先忽略。",
-            actionTitle: "打开 \(Self.clientName(provider))",
+            actionTitle: "打开 \(provider.descriptor.clientName)",
             canDismiss: true
         )
     }
@@ -857,44 +841,32 @@ final class UsageStore: ObservableObject {
         return false
     }
 
-    /// 一次采集目标的名称、界面标题、超时预算与失败退避基准。
+    /// 一次采集的目标：名称、超时预算与退避基准全部来自注册表。
+    /// Codex 需要等本机 app-server 应答，WorkBuddy 走本机 socket，分开给预算，
+    /// 一家挂死不会把另一家已经采好的数据一起超时掉。
     private struct CollectionTarget: Sendable {
-        let name: String
-        let title: String
-        let provider: Provider
-        let timeout: TimeInterval
-        let baseInterval: TimeInterval
+        let provider: UsageProvider
+
+        var name: String { provider.descriptor.collectorKey }
+        var title: String { provider.displayName }
+        var timeout: TimeInterval { provider.descriptor.collectorTimeout }
+        var baseInterval: TimeInterval { provider.descriptor.refreshInterval }
     }
 
-    /// Codex 需要等本机 app-server 应答，WorkBuddy 走本机 socket，两者分开采集、各给各的预算：
-    /// 以前共用一次 80 秒预算，Codex 挂死会把已经采好的 WorkBuddy 数据一起超时掉。
-    private static let fastTargets: [CollectionTarget] = [
-        CollectionTarget(name: "codex", title: "Codex", provider: .codex, timeout: 70, baseInterval: 60),
-        CollectionTarget(name: "workbuddy", title: "WorkBuddy", provider: .workbuddy, timeout: 25, baseInterval: 60),
-    ]
+    /// 环境类失败（超时、python3 缺失、输出不可解析）按指数退避，避免每个周期反复重开子进程。
+    private var collectorFailures: [UsageProvider: Int] = [:]
+    private var collectorRetryAt: [UsageProvider: Date] = [:]
 
-    private static let qoderTarget = CollectionTarget(
-        name: "qoder",
-        title: "Qoder",
-        provider: .qoder,
-        timeout: 80,
-        baseInterval: UsageAnalytics.qoderRefreshInterval
-    )
-
-    /// 环境类失败（超时、python3 缺失、输出不可解析）按指数退避，避免每 60 秒反复重开子进程。
-    private var collectorFailures: [String: Int] = [:]
-    private var collectorRetryAt: [String: Date] = [:]
-
-    private func canCollect(_ name: String) -> Bool {
-        guard let at = collectorRetryAt[name] else { return true }
+    private func canCollect(_ provider: UsageProvider) -> Bool {
+        guard let at = collectorRetryAt[provider] else { return true }
         return Date() >= at
     }
 
     private func registerFailure(_ target: CollectionTarget, message: String) {
-        let failures = (collectorFailures[target.name] ?? 0) + 1
-        collectorFailures[target.name] = failures
+        let failures = (collectorFailures[target.provider] ?? 0) + 1
+        collectorFailures[target.provider] = failures
         let interval = min(target.baseInterval * pow(2, Double(min(failures - 1, 4))), 900)
-        collectorRetryAt[target.name] = Date().addingTimeInterval(interval)
+        collectorRetryAt[target.provider] = Date().addingTimeInterval(interval)
         Diagnostics.record(
             "collector",
             "\(target.name) 连续 \(failures) 次采集失败，\(Int(interval)) 秒后重试：\(message)"
@@ -902,18 +874,14 @@ final class UsageStore: ObservableObject {
     }
 
     private func resetFailures(_ target: CollectionTarget) {
-        guard collectorFailures[target.name] != nil else { return }
+        guard collectorFailures[target.provider] != nil else { return }
         Diagnostics.record("collector", "\(target.name) 采集恢复")
-        collectorFailures[target.name] = nil
-        collectorRetryAt[target.name] = nil
+        collectorFailures[target.provider] = nil
+        collectorRetryAt[target.provider] = nil
     }
 
-    private func setError(_ message: String, for provider: Provider) {
-        switch provider {
-        case .codex: codexError = message
-        case .workbuddy: workbuddyError = message
-        case .qoder: qoderError = message
-        }
+    private func setError(_ message: String?, for provider: UsageProvider) {
+        states[provider]?.error = message
     }
 
     private func consume(_ run: CollectorRunner.RunResult, from target: CollectionTarget) {
@@ -940,45 +908,38 @@ final class UsageStore: ObservableObject {
 
     /// 手动刷新与唤醒都强制采集一次，忽略退避窗口。
     func refreshAll() {
-        refreshFast(force: true)
-        refreshQoder(force: true)
+        for group in Self.groups {
+            refresh(group.providers, force: true)
+        }
     }
 
-    func refreshFast(force: Bool = false) {
-        guard !fastRefreshing else { return }
-        let targets = Self.fastTargets.filter { force || canCollect($0.name) }
-        guard !targets.isEmpty else { return }
-        fastRefreshing = true
+    /// 一批采集目标：跳过在途与仍在退避窗口里的供应商。
+    private func targets(_ providers: [UsageProvider], force: Bool) -> [CollectionTarget] {
+        providers
+            .filter { !self.isRefreshing($0) && (force || self.canCollect($0)) }
+            .map { CollectionTarget(provider: $0) }
+    }
+
+    func refresh(_ providers: [UsageProvider], force: Bool = false) {
+        let batch = targets(providers, force: force)
+        guard !batch.isEmpty else { return }
+        for target in batch { states[target.provider]?.isRefreshing = true }
         Task.detached(priority: .utility) { [weak self] in
             guard let store = self else { return }
-            // 逐个采集、采完立刻回主线程更新：慢的一家（Codex 最多等 70 秒）不会压着
+            // 逐个采集、采完立刻回主线程更新：慢的一家（最多等满自己的超时）不会压着
             // 已经采好的一家让面板等到最后才刷新。
-            for target in targets {
+            for target in batch {
                 let run = CollectorRunner.run(provider: target.name, timeout: target.timeout)
                 await MainActor.run { store.consume(run, from: target) }
             }
             await MainActor.run {
-                store.lastFastAt = Date()
-                store.fastRefreshing = false
+                let finished = Date()
+                for target in batch {
+                    store.states[target.provider]?.isRefreshing = false
+                    store.states[target.provider]?.lastCollectedAt = finished
+                }
                 store.saveCache()
-                store.recomputeAttention(now: Date())
-            }
-        }
-    }
-
-    func refreshQoder(force: Bool = false) {
-        guard !qoderRefreshing, force || canCollect(Self.qoderTarget.name) else { return }
-        qoderRefreshing = true
-        let target = Self.qoderTarget
-        Task.detached(priority: .utility) { [weak self] in
-            let run = CollectorRunner.run(provider: target.name, timeout: target.timeout)
-            guard let self else { return }
-            await MainActor.run {
-                self.consume(run, from: target)
-                self.lastQoderAt = Date()
-                self.qoderRefreshing = false
-                self.saveCache()
-                self.recomputeAttention(now: Date())
+                store.recomputeAttention(now: finished)
             }
         }
     }
@@ -1016,7 +977,7 @@ final class UsageStore: ObservableObject {
             await MainActor.run {
                 if let error = result.error {
                     self.qoderSetup = .failed(error)
-                    self.qoderError = error
+                    self.setError(error, for: .qoder)
                     return
                 }
                 self.qoderSetup = .idle
@@ -1068,8 +1029,8 @@ final class UsageStore: ObservableObject {
                 switch result.action?.status {
                 case "done":
                     self.qoderSetup = .idle
-                    self.qoderError = nil
-                    self.refreshQoder()
+                    self.setError(nil, for: .qoder)
+                    self.refresh([.qoder])
                     return
                 case "failed":
                     self.qoderSetup = .failed(result.action?.message ?? "登录未完成")
@@ -1109,7 +1070,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func prepareNotificationAuthorization() {
-        guard remindQoderClaim || remindWorkBuddyClaim || remindCodexReset
+        guard Providers.all.contains(where: { self.isReminderEnabled($0.id) })
                 || alertLowBalance || alertExhaustion || alertAcceleration else { return }
         let center = notificationCenter
         center.getNotificationSettings { [weak self] settings in
@@ -1134,31 +1095,26 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// 到点通知的标识沿用注册表里登记的提醒键名，与旧版本写死的三个 id 一致。
     private func refreshReminders() {
-        notificationCenter.removePendingNotificationRequests(withIdentifiers: [
-            ReminderID.qoder, ReminderID.workbuddy, ReminderID.codex,
-        ])
-        if remindQoderClaim {
-            addDailyReminder(
-                id: ReminderID.qoder,
-                title: "Qoder 今日 100 Credits 可领取",
-                body: "打开 Qoder 领取今日额度。",
-                hour: 10,
-                minute: 0,
-                category: NotificationCategory.qoder
-            )
+        notificationCenter.removePendingNotificationRequests(
+            withIdentifiers: Providers.all.map(\.reminderDefaultsKey)
+        )
+        for descriptor in Providers.all where isReminderEnabled(descriptor.id) {
+            switch descriptor.claimReminder {
+            case let .daily(hour, grant, body):
+                addDailyReminder(
+                    id: descriptor.reminderDefaultsKey,
+                    title: "\(descriptor.displayName) 今日 \(grant) 可领取",
+                    body: body,
+                    hour: hour,
+                    minute: 0,
+                    category: NotificationCategory.forProvider(descriptor.id)
+                )
+            case .windowReset:
+                scheduleWindowResetReminder(for: descriptor.id)
+            }
         }
-        if remindWorkBuddyClaim {
-            addDailyReminder(
-                id: ReminderID.workbuddy,
-                title: "WorkBuddy 今日 100 积分可领取",
-                body: "打开 WorkBuddy 领取今日积分。",
-                hour: 0,
-                minute: 0,
-                category: NotificationCategory.workbuddy
-            )
-        }
-        scheduleCodexReminder()
     }
 
     private func addDailyReminder(
@@ -1184,85 +1140,57 @@ final class UsageStore: ObservableObject {
         )
     }
 
-    private func scheduleCodexReminder() {
-        notificationCenter.removePendingNotificationRequests(withIdentifiers: [ReminderID.codex])
-        guard remindCodexReset,
-              let windows = codex?.windows,
-              !windows.isEmpty,
+    /// 窗口制没有每日领取，改成在最长窗口的重置点之后立刻通知一次。
+    private func scheduleWindowResetReminder(for provider: UsageProvider) {
+        let id = provider.descriptor.reminderDefaultsKey
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: [id])
+        guard isReminderEnabled(provider),
+              let windows = result(for: provider)?.windows,
               let window = windows.max(by: { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }),
               let minutes = window.windowMinutes,
               let reset = window.resetsAt else { return }
         let now = Int(Date().timeIntervalSince1970)
         guard reset > now else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Codex \(Format.window(minutes))额度已重置"
+        content.title = "\(provider.displayName) \(Format.window(minutes))额度已重置"
         content.body = "额度窗口已刷新，可以继续使用。"
         content.sound = .default
-        content.categoryIdentifier = NotificationCategory.codex
+        content.categoryIdentifier = NotificationCategory.forProvider(provider)
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: TimeInterval(reset - now) + 30,
             repeats: false
         )
         notificationCenter.add(
-            UNNotificationRequest(identifier: ReminderID.codex, content: content, trigger: trigger),
+            UNNotificationRequest(identifier: id, content: content, trigger: trigger),
             withCompletionHandler: nil
         )
     }
 
-    private func currentError(for provider: Provider) -> String? {
-        switch provider {
-        case .codex: return codexError
-        case .workbuddy: return workbuddyError
-        case .qoder: return qoderError
-        }
-    }
-
-    private func title(for provider: Provider) -> String {
-        switch provider {
-        case .codex: return "Codex"
-        case .workbuddy: return "WorkBuddy"
-        case .qoder: return "Qoder"
-        }
-    }
-
-    private func apply(_ result: ProviderResult, to provider: Provider) {
+    private func apply(_ result: ProviderResult, to provider: UsageProvider) {
         guard result.ok == true else {
             let message = result.error
                 ?? (result.ok == nil ? "采集结果缺少状态字段，请升级应用" : "未知错误")
             // 只在状态变化时记一行，否则「未登录」这类稳定状态会被每个周期刷满日志。
-            if currentError(for: provider) != message {
-                Diagnostics.record("collector", "\(title(for: provider)) 数据不可用：\(message)")
+            if error(for: provider) != message {
+                Diagnostics.record("collector", "\(provider.displayName) 数据不可用：\(message)")
             }
             setError(message, for: provider)
             return
         }
-        if currentError(for: provider) != nil {
-            Diagnostics.record("collector", "\(title(for: provider)) 数据恢复")
+        if error(for: provider) != nil {
+            Diagnostics.record("collector", "\(provider.displayName) 数据恢复")
         }
-        switch provider {
-        case .codex:
-            codex = result
-            codexError = nil
-            scheduleCodexReminder()
-        case .workbuddy:
-            workbuddy = result
-            workbuddyError = nil
-        case .qoder:
-            qoder = result
-            qoderError = nil
+        states[provider]?.result = result
+        states[provider]?.error = nil
+        if case .windowReset = provider.descriptor.claimReminder {
+            scheduleWindowResetReminder(for: provider)
         }
-        let usageProvider: UsageProvider
-        switch provider {
-        case .codex: usageProvider = .codex
-        case .workbuddy: usageProvider = .workbuddy
-        case .qoder: usageProvider = .qoder
-        }
-        recordHistory(provider: usageProvider, result: result)
-        evaluateAlerts(provider: usageProvider, result: result)
+        recordHistory(provider: provider, result: result)
+        evaluateAlerts(provider: provider, result: result)
     }
 
     func forecast(for provider: UsageProvider) -> UsageForecast? {
-        guard let result = currentResult(for: provider), result.ok == true else { return nil }
+        guard let result = result(for: provider), result.ok == true else { return nil }
         return UsageAnalytics.forecast(
             provider: provider,
             input: usageInput(result),
@@ -1272,7 +1200,7 @@ final class UsageStore: ObservableObject {
     }
 
     func insight(for provider: UsageProvider) -> UsageInsight? {
-        guard let result = currentResult(for: provider), result.ok == true else { return nil }
+        guard let result = result(for: provider), result.ok == true else { return nil }
         return UsageAnalytics.insight(
             provider: provider,
             input: usageInput(result),
@@ -1280,12 +1208,10 @@ final class UsageStore: ObservableObject {
         )
     }
 
-    private func currentResult(for provider: UsageProvider) -> ProviderResult? {
-        switch provider {
-        case .qoder: return qoder
-        case .workbuddy: return workbuddy
-        case .codex: return codex
-        }
+    /// 采集成功且可用的供应商。
+    func availableResult(for provider: UsageProvider) -> ProviderResult? {
+        guard let result = result(for: provider), result.ok == true else { return nil }
+        return result
     }
 
     private func usageInput(_ result: ProviderResult) -> UsageInput {
@@ -1306,20 +1232,8 @@ final class UsageStore: ObservableObject {
         )
     }
 
-    private func history(for provider: UsageProvider) -> [UsageSample] {
-        switch provider {
-        case .qoder: return qoderHistory
-        case .workbuddy: return workbuddyHistory
-        case .codex: return codexHistory
-        }
-    }
-
     private func setHistory(_ samples: [UsageSample], for provider: UsageProvider) {
-        switch provider {
-        case .qoder: qoderHistory = samples
-        case .workbuddy: workbuddyHistory = samples
-        case .codex: codexHistory = samples
-        }
+        states[provider]?.history = samples
     }
 
     private func loadHistory() {
@@ -1342,16 +1256,16 @@ final class UsageStore: ObservableObject {
         Diagnostics.record("history", "历史文件与备份均无法解析，已改名保留后重新开始积累")
     }
 
-    private func applyHistory(_ file: HistoryFile) {
+    private func applyHistory(_ snapshot: HistorySnapshot) {
         let now = Date()
-        qoderHistory = UsageAnalytics.prune(file.qoder ?? [], now: now)
-        workbuddyHistory = UsageAnalytics.prune(file.workbuddy ?? [], now: now)
-        codexHistory = UsageAnalytics.prune(file.codex ?? [], now: now)
+        for provider in UsageProvider.allCases {
+            states[provider]?.history = UsageAnalytics.prune(snapshot.samples[provider] ?? [], now: now)
+        }
     }
 
-    private static func decodeHistory(at url: URL) -> HistoryFile? {
+    private static func decodeHistory(at url: URL) -> HistorySnapshot? {
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
-        return try? JSONDecoder().decode(HistoryFile.self, from: data)
+        return LocalData.decodeHistory(data)
     }
 
     /// 把读不出的主文件改名留证；备份是否删除由调用方决定。
@@ -1373,12 +1287,12 @@ final class UsageStore: ObservableObject {
     }
 
     private func saveHistory() {
-        let file = HistoryFile(
-            qoder: qoderHistory,
-            workbuddy: workbuddyHistory,
-            codex: codexHistory
+        let snapshot = HistorySnapshot(
+            samples: Providers.all.reduce(into: [:]) { partial, descriptor in
+                partial[descriptor.id] = history(for: descriptor.id)
+            }
         )
-        guard let data = try? JSONEncoder().encode(file) else {
+        guard let data = LocalData.encodeHistory(snapshot) else {
             Diagnostics.record("history", "历史编码失败，本轮未写入")
             return
         }
@@ -1398,14 +1312,10 @@ final class UsageStore: ObservableObject {
     }
 
     private func seedHistoryFromCache() {
-        let cached: [(UsageProvider, ProviderResult?)] = [
-            (.qoder, qoder),
-            (.workbuddy, workbuddy),
-            (.codex, codex),
-        ]
-        for (provider, result) in cached {
-            guard let result, result.ok == true, let date = result.updatedDate else { continue }
-            recordHistory(provider: provider, result: result, at: date)
+        for provider in Providers.all {
+            guard let result = result(for: provider.id), result.ok == true,
+                  let date = result.updatedDate else { continue }
+            recordHistory(provider: provider.id, result: result, at: date)
         }
     }
 
@@ -1427,7 +1337,9 @@ final class UsageStore: ObservableObject {
     }
 
     func exportHistory() {
-        UsageExport.save(qoder: qoderHistory, workbuddy: workbuddyHistory, codex: codexHistory)
+        UsageExport.save(Providers.all.reduce(into: [:]) { partial, descriptor in
+            partial[descriptor.id] = history(for: descriptor.id)
+        })
     }
 
     private func evaluateAlerts(provider: UsageProvider, result: ProviderResult) {
@@ -1435,8 +1347,8 @@ final class UsageStore: ObservableObject {
         let input = usageInput(result)
         let now = Date()
         evaluateLowAlert(provider: provider, input: input, now: now)
-        if provider == .codex {
-            evaluateExhaustionAlert(input: input, now: now)
+        if provider.isPercent {
+            evaluateExhaustionAlert(provider: provider, input: input, now: now)
         }
         evaluateAccelerationAlert(provider: provider, input: input, now: now)
     }
@@ -1461,8 +1373,8 @@ final class UsageStore: ObservableObject {
         let rounded = Int(percent.rounded())
         let title: String
         let body: String
-        if provider == .codex, let window = UsageAnalytics.lowestWindow(of: input) {
-            title = "Codex \(UsageAnalytics.windowText(window.minutes))窗口低于 \(threshold)%"
+        if provider.isPercent, let window = UsageAnalytics.lowestWindow(of: input) {
+            title = "\(provider.displayName) \(UsageAnalytics.windowText(window.minutes))窗口低于 \(threshold)%"
             body = "当前剩余 \(rounded)%，请留意额度消耗或等待重置。"
         } else {
             title = "\(provider.displayName) 剩余低于 \(threshold)%"
@@ -1482,12 +1394,14 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    private func evaluateExhaustionAlert(input: UsageInput, now: Date) {
+    /// 窗口制的耗尽风险：按窗口「可能在重置前耗尽」逐一判定，去重键沿用既有的
+    /// `alert.<provider>.exhaust.<minutes>`，写入的是该窗口的重置时间。
+    private func evaluateExhaustionAlert(provider: UsageProvider, input: UsageInput, now: Date) {
         guard alertExhaustion else { return }
         guard let forecast = UsageAnalytics.forecast(
-            provider: .codex,
+            provider: provider,
             input: input,
-            samples: codexHistory,
+            samples: history(for: provider),
             now: now,
             lowThreshold: lowThreshold
         ) else { return }
@@ -1500,17 +1414,17 @@ final class UsageStore: ObservableObject {
         guard let reset = risk.resetsAt else { return }
 
         let defaults = UserDefaults.standard
-        let key = "alert.codex.exhaust.\(risk.minutes)"
+        let key = "alert.\(provider.rawValue).exhaust.\(risk.minutes)"
         let resetEpoch = Int(reset.timeIntervalSince1970)
         guard defaults.integer(forKey: key) != resetEpoch else { return }
 
-        let title = "Codex \(UsageAnalytics.windowText(risk.minutes))窗口可能在重置前耗尽"
+        let title = "\(provider.displayName) \(UsageAnalytics.windowText(risk.minutes))窗口可能在重置前耗尽"
         let body = "剩余 \(Int(risk.remainingPercent.rounded()))%，按近期速度预计 \(Format.reset(Int(risk.exhaustAt.timeIntervalSince1970))) 耗尽，早于重置时间 \(Format.reset(resetEpoch))。"
         deliverAlert(
-            id: "alert.codex.exhaust.\(risk.minutes)",
+            id: key,
             title: title,
             body: body,
-            provider: .codex
+            provider: provider
         ) {
             defaults.set(resetEpoch, forKey: key)
         }
@@ -1598,51 +1512,50 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// 一个刷新节奏一组一个定时器：快组照常 60 秒，走 CLI 的 Qoder 单独按自己的间隔跑。
     private func scheduleTimers() {
-        let fast = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshFast() }
+        for group in Self.groups {
+            let timer = Timer(timeInterval: group.interval, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refresh(group.providers) }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            refreshTimers.append(timer)
         }
-        RunLoop.main.add(fast, forMode: .common)
-        fastTimer = fast
-
-        let qoder = Timer(timeInterval: UsageAnalytics.qoderRefreshInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshQoder() }
-        }
-        RunLoop.main.add(qoder, forMode: .common)
-        qoderTimer = qoder
     }
 
-    /// 面板展开时补一次 Qoder 采集：领取、消耗都要等下一个定时周期才反映太慢。
+    /// 面板展开时补采注册表里标记的供应商：领取、消耗都要等下一个定时周期才反映太慢。
     /// 采集耗时约 5 秒且异步进行，面板先显示缓存值，回来后自动就地更新。
-    func refreshQoderIfStale() {
-        guard let at = lastQoderAt,
-              Date().timeIntervalSince(at) >= UsageAnalytics.qoderRefreshInterval else { return }
-        refreshQoder()
+    func refreshStaleForPanel() {
+        let now = Date()
+        for provider in Providers.panelRefreshProviders {
+            guard let at = lastCollectedAt(for: provider),
+                  now.timeIntervalSince(at) >= provider.descriptor.refreshInterval else { continue }
+            refresh([provider])
+        }
     }
 
     private func loadCache() {
         guard FileManager.default.fileExists(atPath: Self.cacheURL.path) else { return }
         guard let data = try? Data(contentsOf: Self.cacheURL),
-              let cache = try? JSONDecoder().decode(CacheFile.self, from: data) else {
+              let snapshot = LocalData.decodeCache(data) else {
             Diagnostics.record("cache", "cache.json 无法解析，本次启动从空白状态开始")
             return
         }
-        codex = cache.codex
-        workbuddy = cache.workbuddy
-        qoder = cache.qoder
-        lastFastAt = cache.fastAt.map { Date(timeIntervalSince1970: $0) }
-        lastQoderAt = cache.qoderAt.map { Date(timeIntervalSince1970: $0) }
+        for descriptor in Providers.all {
+            states[descriptor.id]?.result = snapshot.results[descriptor.id]
+            states[descriptor.id]?.lastCollectedAt = snapshot.collectedAt[descriptor.id]
+        }
     }
 
     private func saveCache() {
-        let cache = CacheFile(
-            codex: codex,
-            workbuddy: workbuddy,
-            qoder: qoder,
-            fastAt: lastFastAt?.timeIntervalSince1970,
-            qoderAt: lastQoderAt?.timeIntervalSince1970
-        )
-        guard let data = try? JSONEncoder().encode(cache) else {
+        var snapshot = CacheSnapshot()
+        for descriptor in Providers.all {
+            snapshot.results[descriptor.id] = states[descriptor.id]?.result
+            if let at = states[descriptor.id]?.lastCollectedAt {
+                snapshot.collectedAt[descriptor.id] = at
+            }
+        }
+        guard let data = LocalData.encodeCache(snapshot) else {
             Diagnostics.record("cache", "缓存编码失败")
             return
         }
@@ -2197,48 +2110,34 @@ enum MenuBarGlyph {
 
 extension UsageStore {
     var menuBarMetrics: [MenuBarMetric] {
-        var metrics: [MenuBarMetric] = []
-        if showQoderInMenuBar {
-            let ok = qoder?.ok == true
-            let remaining: Double? = ok ? qoder?.remaining : nil
-            let total = ok ? (qoder?.total ?? 0) : 0
-            let percent = percentOf(remaining, over: total)
-            metrics.append(MenuBarMetric(
-                letter: "Q",
-                value: remaining.map { Format.credits($0) } ?? "--",
-                compact: remaining.map { Format.compact($0) } ?? "--",
-                percent: percent.map { Format.percent($0) } ?? "--",
-                fraction: fractionOf(percent),
-                tint: Theme.qoder
-            ))
+        Providers.ordered.compactMap { menuBarMetric(for: $0) }
+    }
+
+    private func menuBarMetric(for descriptor: ProviderDescriptor) -> MenuBarMetric? {
+        guard isShownInMenuBar(descriptor.id) else { return nil }
+        let result = result(for: descriptor.id)
+        let ok = result?.ok == true
+        let value: String
+        let compact: String
+        let percent: Double?
+        if descriptor.isPercent {
+            percent = ok ? result?.primaryWindow?.remainingPercent : nil
+            value = Format.percent(percent)
+            compact = value
+        } else {
+            let remaining: Double? = ok ? result?.remaining : nil
+            percent = percentOf(remaining, over: ok ? (result?.total ?? 0) : 0)
+            value = Format.credits(remaining)
+            compact = Format.compact(remaining)
         }
-        if showWorkBuddyInMenuBar {
-            let ok = workbuddy?.ok == true
-            let remaining: Double? = ok ? workbuddy?.remaining : nil
-            let percent = percentOf(remaining, over: ok ? (workbuddy?.total ?? 0) : 0)
-            metrics.append(MenuBarMetric(
-                letter: "W",
-                value: remaining.map { Format.credits($0) } ?? "--",
-                compact: remaining.map { Format.compact($0) } ?? "--",
-                percent: percent.map { Format.percent($0) } ?? "--",
-                fraction: fractionOf(percent),
-                tint: Theme.workbuddy
-            ))
-        }
-        if showCodexInMenuBar {
-            let window = codex?.ok == true ? codex?.primaryWindow : nil
-            let percent = window?.remainingPercent
-            let text = percent.map { Format.percent($0) } ?? "--"
-            metrics.append(MenuBarMetric(
-                letter: "C",
-                value: text,
-                compact: text,
-                percent: text,
-                fraction: fractionOf(percent),
-                tint: Theme.codex
-            ))
-        }
-        return metrics
+        return MenuBarMetric(
+            letter: descriptor.menuBarLetter,
+            value: value,
+            compact: compact,
+            percent: Format.percent(percent),
+            fraction: fractionOf(percent),
+            tint: descriptor.color
+        )
     }
 
     func menuBarText(for style: MenuBarStyle) -> String {
@@ -2270,28 +2169,24 @@ extension UsageStore {
         if !isAttentionMuted, let item = attentionItems.first {
             parts.append(item.kind == .warning ? "需要关注：\(item.title)" : "待处理：\(item.title)")
         }
-        if let qoder, qoder.ok == true {
-            var line = "Qoder 剩余 \(Format.credits(qoder.remaining)) / \(Format.credits(qoder.total)) Credits"
-            if let suffix = forecastSuffix(for: .qoder) { line += " · \(suffix)" }
-            parts.append(line)
-        } else {
-            parts.append("Qoder 不可用")
-        }
-        if let workbuddy, workbuddy.ok == true {
-            var line = "WorkBuddy 剩余 \(Format.credits(workbuddy.remaining)) / \(Format.credits(workbuddy.total)) credits"
-            if let suffix = forecastSuffix(for: .workbuddy) { line += " · \(suffix)" }
-            parts.append(line)
-        } else {
-            parts.append("WorkBuddy 不可用")
-        }
-        if let codex, codex.ok == true, let window = codex.primaryWindow {
-            var line = "Codex \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))"
-            if let suffix = forecastSuffix(for: .codex) { line += " · \(suffix)" }
-            parts.append(line)
-        } else {
-            parts.append("Codex 不可用")
-        }
+        parts.append(contentsOf: Providers.ordered.map { tooltipLine(for: $0) })
         return parts.joined(separator: " · ")
+    }
+
+    private func tooltipLine(for descriptor: ProviderDescriptor) -> String {
+        let result = result(for: descriptor.id)
+        if descriptor.isPercent {
+            guard result?.ok == true, let window = result?.primaryWindow else {
+                return "\(descriptor.displayName) 不可用"
+            }
+            var line = "\(descriptor.displayName) \(Format.window(window.windowMinutes))窗口剩余 \(Format.percent(window.remainingPercent))"
+            if let suffix = forecastSuffix(for: descriptor.id) { line += " · \(suffix)" }
+            return line
+        }
+        guard let result, result.ok == true else { return "\(descriptor.displayName) 不可用" }
+        var line = "\(descriptor.displayName) 剩余 \(Format.credits(result.remaining)) / \(Format.credits(result.total)) \(descriptor.creditUnit)"
+        if let suffix = forecastSuffix(for: descriptor.id) { line += " · \(suffix)" }
+        return line
     }
 
     private func forecastSuffix(for provider: UsageProvider) -> String? {
@@ -2319,9 +2214,7 @@ struct MenuContent: View {
             header
             attentionStrip
             updateBanner
-            qoderCard
-            workbuddyCard
-            codexCard
+            providerCards
             quickBar
             if settingsExpanded {
                 settingsPanel
@@ -2343,7 +2236,7 @@ struct MenuContent: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AI 用量")
                     .font(.system(size: 16, weight: .bold))
-                Text("Qoder · WorkBuddy · Codex")
+                Text(Providers.ordered.map(\.displayName).joined(separator: " · "))
                     .font(Token.caption)
                     .foregroundStyle(.secondary)
             }
@@ -2382,13 +2275,14 @@ struct MenuContent: View {
         HStack(spacing: Token.spaceTight) {
             Image(systemName: "clock")
                 .font(.system(size: 10, weight: .semibold))
-            Text("刷新 \(Format.time(store.lastFastAt))")
-                .lineLimit(1)
-                .fixedSize()
-            Text("·").foregroundStyle(.quaternary)
-            Text("Qoder \(Format.time(store.lastQoderAt))")
-                .lineLimit(1)
-                .fixedSize()
+            ForEach(Array(store.refreshSummaries.enumerated()), id: \.offset) { index, summary in
+                if index > 0 {
+                    Text("·").foregroundStyle(.quaternary)
+                }
+                Text("\(summary.label) \(Format.time(summary.at))")
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             Spacer(minLength: Token.spaceTight)
             settingChip(
                 "预警 \(store.lowBalanceThreshold)%",
@@ -2650,34 +2544,118 @@ struct MenuContent: View {
         return String(notes.prefix(500))
     }
 
-    private var qoderCard: some View {
-        ProviderCard(
-            title: "Qoder",
-            subtitle: "官方 CLI · 账号额度",
-            icon: "curlybraces",
-            color: Theme.qoder,
-            plan: Format.plan(store.qoder?.plan),
-            value: store.qoder?.ok == true ? Format.credits(store.qoder?.remaining) : "--",
-            valueCaption: qoderCaption,
-            status: store.qoderError,
-            footer: qoderFooter,
-            links: qoderLinks,
+    /// 三家共用一套卡片外壳，内容按额度口径与额度布局分派，新增供应商不需要再加卡片。
+    @ViewBuilder
+    private var providerCards: some View {
+        ForEach(Providers.ordered, id: \.id) { descriptor in
+            providerCard(descriptor.id)
+        }
+    }
+
+    private func providerCard(_ provider: UsageProvider) -> some View {
+        let descriptor = provider.descriptor
+        return ProviderCard(
+            title: descriptor.displayName,
+            subtitle: descriptor.subtitle,
+            icon: descriptor.icon,
+            color: descriptor.color,
+            plan: Format.plan(store.result(for: provider)?.plan),
+            value: cardValue(provider),
+            valueCaption: cardCaption(provider),
+            status: store.error(for: provider),
+            footer: cardFooter(provider),
+            links: cardLinks(provider),
             compact: store.simpleMode
         ) {
-            if store.simpleMode {
-                qoderPrimaryBar
-                simpleTodayRow(.qoder)
-            } else if let qoder = store.qoder {
-                let addonTotal = qoder.addonTotal ?? 0
-                let addonUsed = qoder.addonUsed ?? 0
-                let planTotal = qoder.planTotal ?? 0
-                let planUsed = qoder.planUsed ?? 0
+            providerContent(provider)
+        }
+    }
+
+    private func cardValue(_ provider: UsageProvider) -> String {
+        guard let result = store.result(for: provider), result.ok == true else { return "--" }
+        switch provider.quotaKind {
+        case .credits:
+            return Format.credits(result.remaining)
+        case .percentWindow:
+            guard let window = result.primaryWindow else { return "--" }
+            return Format.percent(window.remainingPercent)
+        }
+    }
+
+    private func cardCaption(_ provider: UsageProvider) -> String {
+        guard let result = store.result(for: provider), result.ok == true else { return "等待采集" }
+        switch provider.quotaKind {
+        case .credits:
+            guard let total = result.total, total > 0 else { return "等待采集" }
+            return "剩余 / 共 \(Format.credits(total)) \(provider.descriptor.creditUnit)"
+        case .percentWindow:
+            guard let window = result.primaryWindow else { return "等待采集" }
+            return "\(Format.window(window.windowMinutes))窗口剩余"
+        }
+    }
+
+    private func cardFooter(_ provider: UsageProvider) -> String {
+        let result = store.result(for: provider)
+        if store.error(for: provider) != nil, result != nil {
+            return "上次成功 \(Format.time(result?.updatedDate))"
+        }
+        return "更新于 \(Format.time(result?.updatedDate ?? store.lastCollectedAt(for: provider)))"
+    }
+
+    private func cardLinks(_ provider: UsageProvider) -> [ProviderLink] {
+        let descriptor = provider.descriptor
+        var links = [
+            ProviderLink(
+                title: "打开",
+                icon: "arrow.up.forward.app",
+                help: descriptor.clientHelp
+            ) {
+                Apps.open(bundleID: descriptor.clientBundleID, fallback: descriptor.clientAppPath)
+            },
+            ProviderLink(
+                title: "官网",
+                icon: "globe",
+                help: descriptor.websiteHelp
+            ) {
+                Apps.openURL(descriptor.websiteURL)
+            },
+        ]
+        if descriptor.setup == .qoderCLI {
+            links.append(contentsOf: qoderSetupLinks())
+        }
+        return links
+    }
+
+    /// Qoder 走 CLI 采集，未安装/未登录时把安装与授权动作放进卡片链接里。
+    @ViewBuilder
+    private func providerContent(_ provider: UsageProvider) -> some View {
+        switch provider.quotaKind {
+        case .credits:
+            creditsContent(provider)
+        case .percentWindow:
+            windowContent(provider)
+        }
+    }
+
+    @ViewBuilder
+    private func creditsContent(_ provider: UsageProvider) -> some View {
+        let descriptor = provider.descriptor
+        if store.simpleMode {
+            simpleCreditsBar(provider)
+            simpleTodayRow(provider)
+        } else if let result = store.result(for: provider) {
+            switch descriptor.creditLayout ?? .resourcePackage {
+            case .planBreakdown:
+                let addonTotal = result.addonTotal ?? 0
+                let addonUsed = result.addonUsed ?? 0
+                let planTotal = result.planTotal ?? 0
+                let planUsed = result.planUsed ?? 0
                 if addonTotal > 0 {
                     UsageBar(
                         label: "附加额度",
                         detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
                         fraction: addonUsed / addonTotal,
-                        tint: Theme.qoder
+                        tint: descriptor.color
                     )
                 }
                 if planTotal > 0 {
@@ -2685,7 +2663,7 @@ struct MenuContent: View {
                         label: "套餐额度",
                         detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
                         fraction: planUsed / planTotal,
-                        tint: Theme.qoder
+                        tint: descriptor.color
                     )
                 }
                 if addonTotal == 0 && planTotal == 0 {
@@ -2693,193 +2671,141 @@ struct MenuContent: View {
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
-                if let expires = qoder.planExpiresAt, expires != "N/A", !expires.isEmpty {
+                if let expires = result.planExpiresAt, expires != "N/A", !expires.isEmpty {
                     Text("套餐到期 \(expires)")
                         .font(Token.caption)
                         .foregroundStyle(.secondary)
                 }
-                insightRow(.qoder)
-                forecastRow(.qoder, tint: Theme.qoder)
-            } else {
-                emptyContent
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var qoderPrimaryBar: some View {
-        if let qoder = store.qoder {
-            let planTotal = qoder.planTotal ?? 0
-            let planUsed = qoder.planUsed ?? 0
-            let addonTotal = qoder.addonTotal ?? 0
-            let addonUsed = qoder.addonUsed ?? 0
-            if planTotal > 0 {
-                UsageBar(
-                    label: "套餐额度",
-                    detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
-                    fraction: planUsed / planTotal,
-                    tint: Theme.qoder
-                )
-            } else if addonTotal > 0 {
-                UsageBar(
-                    label: "附加额度",
-                    detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
-                    fraction: addonUsed / addonTotal,
-                    tint: Theme.qoder
-                )
-            } else {
-                Text("当前套餐未包含 Credits")
-                    .font(Token.meta)
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            emptyContent
-        }
-    }
-
-    private var qoderCaption: String {
-        guard store.qoder?.ok == true, let total = store.qoder?.total, total > 0 else {
-            return "等待采集"
-        }
-        return "剩余 / 共 \(Format.credits(total)) Credits"
-    }
-
-    private var workbuddyCard: some View {
-        ProviderCard(
-            title: "WorkBuddy",
-            subtitle: "本机客户端 · 资源包",
-            icon: "briefcase.fill",
-            color: Theme.workbuddy,
-            plan: Format.plan(store.workbuddy?.plan),
-            value: store.workbuddy?.ok == true ? Format.credits(store.workbuddy?.remaining) : "--",
-            valueCaption: workbuddyCaption,
-            status: store.workbuddyError,
-            footer: workbuddyFooter,
-            links: workbuddyLinks,
-            compact: store.simpleMode
-        ) {
-            if store.simpleMode {
-                workbuddyPrimaryBar
-                simpleTodayRow(.workbuddy)
-            } else if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
-                UsageBar(
-                    label: "Credits",
-                    detail: "已用 \(Format.credits(workbuddy.used)) / \(Format.credits(total))",
-                    fraction: (workbuddy.usedPercent ?? 0) / 100,
-                    tint: Theme.workbuddy
-                )
-                if let packages = workbuddy.packages, packages > 0 {
-                    Text("\(packages) 个资源包")
-                        .font(Token.caption)
-                        .foregroundStyle(.secondary)
-                }
-                insightRow(.workbuddy)
-                forecastRow(.workbuddy, tint: Theme.workbuddy)
-            } else if store.workbuddy != nil {
-                Text("暂无可用的 Credits 资源包")
-                    .font(Token.meta)
-                    .foregroundStyle(.secondary)
-            } else {
-                emptyContent
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var workbuddyPrimaryBar: some View {
-        if let workbuddy = store.workbuddy, let total = workbuddy.total, total > 0 {
-            UsageBar(
-                label: "Credits",
-                detail: "已用 \(Format.credits(workbuddy.used)) / \(Format.credits(total))",
-                fraction: (workbuddy.usedPercent ?? 0) / 100,
-                tint: Theme.workbuddy
-            )
-        } else if store.workbuddy != nil {
-            Text("暂无可用的 Credits 资源包")
-                .font(Token.meta)
-                .foregroundStyle(.secondary)
-        } else {
-            emptyContent
-        }
-    }
-
-    private var workbuddyCaption: String {
-        guard store.workbuddy?.ok == true, let total = store.workbuddy?.total, total > 0 else {
-            return "等待采集"
-        }
-        return "剩余 / 共 \(Format.credits(total)) credits"
-    }
-
-    private var codexCard: some View {
-        ProviderCard(
-            title: "Codex",
-            subtitle: "ChatGPT 登录 · 限额窗口",
-            icon: "terminal.fill",
-            color: Theme.codex,
-            plan: Format.plan(store.codex?.plan),
-            value: codexValue,
-            valueCaption: codexCaption,
-            status: store.codexError,
-            footer: codexFooter,
-            links: codexLinks,
-            compact: store.simpleMode
-        ) {
-            if store.simpleMode {
-                codexPrimaryBar
-                simpleTodayRow(.codex)
-            } else if let codex = store.codex {
-                if let windows = codex.windows, !windows.isEmpty {
-                    ForEach(windows) { window in
-                        UsageBar(
-                            label: "\(Format.window(window.windowMinutes))窗口",
-                            detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
-                            fraction: (window.usedPercent ?? 0) / 100,
-                            tint: Theme.codex
-                        )
-                    }
-                    if let reset = windows.first?.resetsAt {
-                        Text("重置于 \(Format.reset(reset))")
+                insightRow(provider)
+                forecastRow(provider, tint: descriptor.color)
+            case .resourcePackage:
+                if let total = result.total, total > 0 {
+                    UsageBar(
+                        label: "Credits",
+                        detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
+                        fraction: (result.usedPercent ?? 0) / 100,
+                        tint: descriptor.color
+                    )
+                    if let packages = result.packages, packages > 0 {
+                        Text("\(packages) 个资源包")
                             .font(Token.caption)
                             .foregroundStyle(.secondary)
                     }
+                    insightRow(provider)
+                    forecastRow(provider, tint: descriptor.color)
                 } else {
-                    Text("当前账号没有限额窗口")
+                    Text("暂无可用的 Credits 资源包")
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    Text("额外 Credits")
-                    Spacer()
-                    if let credits = codex.credits, credits.hasCredits == true {
-                        Text(credits.unlimited == true ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
-                    } else {
-                        Text("无")
-                    }
-                }
-                .font(Token.caption)
-                .foregroundStyle(.secondary)
-                insightRow(.codex)
-                forecastRow(.codex, tint: Theme.codex)
-            } else {
-                emptyContent
             }
+        } else {
+            emptyContent
         }
     }
 
-    private var codexValue: String {
-        guard store.codex?.ok == true, let window = store.codex?.primaryWindow else { return "--" }
-        return Format.percent(window.remainingPercent)
+    /// 简单模式只保留最能代表当前余额的一条进度条。
+    @ViewBuilder
+    private func simpleCreditsBar(_ provider: UsageProvider) -> some View {
+        let descriptor = provider.descriptor
+        if let result = store.result(for: provider) {
+            switch descriptor.creditLayout ?? .resourcePackage {
+            case .planBreakdown:
+                let planTotal = result.planTotal ?? 0
+                let planUsed = result.planUsed ?? 0
+                let addonTotal = result.addonTotal ?? 0
+                let addonUsed = result.addonUsed ?? 0
+                if planTotal > 0 {
+                    UsageBar(
+                        label: "套餐额度",
+                        detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
+                        fraction: planUsed / planTotal,
+                        tint: descriptor.color
+                    )
+                } else if addonTotal > 0 {
+                    UsageBar(
+                        label: "附加额度",
+                        detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
+                        fraction: addonUsed / addonTotal,
+                        tint: descriptor.color
+                    )
+                } else {
+                    Text("当前套餐未包含 Credits")
+                        .font(Token.meta)
+                        .foregroundStyle(.secondary)
+                }
+            case .resourcePackage:
+                if let total = result.total, total > 0 {
+                    UsageBar(
+                        label: "Credits",
+                        detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
+                        fraction: (result.usedPercent ?? 0) / 100,
+                        tint: descriptor.color
+                    )
+                } else {
+                    Text("暂无可用的 Credits 资源包")
+                        .font(Token.meta)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            emptyContent
+        }
     }
 
     @ViewBuilder
-    private var codexPrimaryBar: some View {
-        if let codex = store.codex {
-            if let window = codex.primaryWindow {
+    private func windowContent(_ provider: UsageProvider) -> some View {
+        let descriptor = provider.descriptor
+        if store.simpleMode {
+            simpleWindowBar(provider)
+            simpleTodayRow(provider)
+        } else if let result = store.result(for: provider) {
+            if let windows = result.windows, !windows.isEmpty {
+                ForEach(windows) { window in
+                    UsageBar(
+                        label: "\(Format.window(window.windowMinutes))窗口",
+                        detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
+                        fraction: (window.usedPercent ?? 0) / 100,
+                        tint: descriptor.color
+                    )
+                }
+                if let reset = windows.first?.resetsAt {
+                    Text("重置于 \(Format.reset(reset))")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("当前账号没有限额窗口")
+                    .font(Token.meta)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Text("额外 Credits")
+                Spacer()
+                if let credits = result.credits, credits.hasCredits == true {
+                    Text(credits.unlimited == true ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
+                } else {
+                    Text("无")
+                }
+            }
+            .font(Token.caption)
+            .foregroundStyle(.secondary)
+            insightRow(provider)
+            forecastRow(provider, tint: descriptor.color)
+        } else {
+            emptyContent
+        }
+    }
+
+    @ViewBuilder
+    private func simpleWindowBar(_ provider: UsageProvider) -> some View {
+        if let result = store.result(for: provider) {
+            if let window = result.primaryWindow {
                 UsageBar(
                     label: "\(Format.window(window.windowMinutes))窗口",
                     detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
                     fraction: (window.usedPercent ?? 0) / 100,
-                    tint: Theme.codex
+                    tint: provider.descriptor.color
                 )
             } else {
                 Text("当前账号没有限额窗口")
@@ -2891,11 +2817,73 @@ struct MenuContent: View {
         }
     }
 
-    private var codexCaption: String {
-        guard store.codex?.ok == true, let window = store.codex?.primaryWindow else {
-            return "等待采集"
+    private func qoderSetupLinks() -> [ProviderLink] {
+        var links: [ProviderLink] = []
+        switch store.qoderSetup {
+        case .installing:
+            links.append(ProviderLink(
+                title: "安装中",
+                icon: "arrow.down.circle",
+                help: "正在下载并执行官方安装脚本，约需 1-2 分钟"
+            ) {})
+        case .preparing:
+            links.append(ProviderLink(
+                title: "准备授权",
+                icon: "link",
+                help: "正在获取登录授权链接"
+            ) {})
+        case .waitingAuth(let url):
+            links.append(ProviderLink(
+                title: "等待授权",
+                icon: "link",
+                help: "在浏览器完成登录后会自动刷新；点击可重新打开授权页"
+            ) {
+                NSWorkspace.shared.open(url)
+            })
+            links.append(ProviderLink(
+                title: "取消",
+                icon: "xmark",
+                help: "取消本次登录"
+            ) {
+                store.cancelQoderSetup()
+            })
+        case .failed(let message):
+            links.append(ProviderLink(
+                title: "重试登录",
+                icon: "arrow.clockwise",
+                help: message
+            ) {
+                store.loginQoderCLI()
+            })
+            links.append(ProviderLink(
+                title: "终端处理",
+                icon: "terminal",
+                help: "授权页无法完成时，在终端手动执行登录：" + message
+            ) {
+                Apps.openTerminal("~/.local/bin/qoderclicn login")
+            })
+        case .idle:
+            if let error = store.error(for: .qoder) {
+                if error.contains("未登录") {
+                    links.append(ProviderLink(
+                        title: "登录",
+                        icon: "person.crop.circle.badge.questionmark",
+                        help: "在浏览器完成 Qoder CLI 登录"
+                    ) {
+                        store.loginQoderCLI()
+                    })
+                } else if error.contains("未安装") {
+                    links.append(ProviderLink(
+                        title: "安装 CLI",
+                        icon: "arrow.down.circle",
+                        help: "下载并安装官方 Qoder CLI，完成后自动登录"
+                    ) {
+                        store.installQoderCLI()
+                    })
+                }
+            }
         }
-        return "\(Format.window(window.windowMinutes))窗口剩余"
+        return links
     }
 
     @ViewBuilder
@@ -2971,149 +2959,6 @@ struct MenuContent: View {
             .foregroundStyle(.secondary)
     }
 
-    private var qoderFooter: String {
-        if store.qoderError != nil, store.qoder != nil {
-            return "上次成功 \(Format.time(store.qoder?.updatedDate))"
-        }
-        return "更新于 \(Format.time(store.qoder?.updatedDate ?? store.lastQoderAt))"
-    }
-
-    private var workbuddyFooter: String {
-        if store.workbuddyError != nil, store.workbuddy != nil {
-            return "上次成功 \(Format.time(store.workbuddy?.updatedDate))"
-        }
-        return "更新于 \(Format.time(store.workbuddy?.updatedDate ?? store.lastFastAt))"
-    }
-
-    private var codexFooter: String {
-        if store.codexError != nil, store.codex != nil {
-            return "上次成功 \(Format.time(store.codex?.updatedDate))"
-        }
-        return "更新于 \(Format.time(store.codex?.updatedDate ?? store.lastFastAt))"
-    }
-
-    private var qoderLinks: [ProviderLink] {
-        var links = [
-            ProviderLink(
-                title: "打开",
-                icon: "arrow.up.forward.app",
-                help: "打开 Qoder CN"
-            ) {
-                Apps.open(bundleID: "com.qodercn.app", fallback: "/Applications/Qoder CN.app")
-            },
-            ProviderLink(
-                title: "官网",
-                icon: "globe",
-                help: "打开 Qoder 官网"
-            ) {
-                Apps.openURL("https://qoder.com.cn")
-            },
-        ]
-        switch store.qoderSetup {
-        case .installing:
-            links.append(ProviderLink(
-                title: "安装中",
-                icon: "arrow.down.circle",
-                help: "正在下载并执行官方安装脚本，约需 1-2 分钟"
-            ) {})
-        case .preparing:
-            links.append(ProviderLink(
-                title: "准备授权",
-                icon: "link",
-                help: "正在获取登录授权链接"
-            ) {})
-        case .waitingAuth(let url):
-            links.append(ProviderLink(
-                title: "等待授权",
-                icon: "link",
-                help: "在浏览器完成登录后会自动刷新；点击可重新打开授权页"
-            ) {
-                NSWorkspace.shared.open(url)
-            })
-            links.append(ProviderLink(
-                title: "取消",
-                icon: "xmark",
-                help: "取消本次登录"
-            ) {
-                store.cancelQoderSetup()
-            })
-        case .failed(let message):
-            links.append(ProviderLink(
-                title: "重试登录",
-                icon: "arrow.clockwise",
-                help: message
-            ) {
-                store.loginQoderCLI()
-            })
-            links.append(ProviderLink(
-                title: "终端处理",
-                icon: "terminal",
-                help: "授权页无法完成时，在终端手动执行登录：" + message
-            ) {
-                Apps.openTerminal("~/.local/bin/qoderclicn login")
-            })
-        case .idle:
-            if let error = store.qoderError {
-                if error.contains("未登录") {
-                    links.append(ProviderLink(
-                        title: "登录",
-                        icon: "person.crop.circle.badge.questionmark",
-                        help: "在浏览器完成 Qoder CLI 登录"
-                    ) {
-                        store.loginQoderCLI()
-                    })
-                } else if error.contains("未安装") {
-                    links.append(ProviderLink(
-                        title: "安装 CLI",
-                        icon: "arrow.down.circle",
-                        help: "下载并安装官方 Qoder CLI，完成后自动登录"
-                    ) {
-                        store.installQoderCLI()
-                    })
-                }
-            }
-        }
-        return links
-    }
-
-    private var workbuddyLinks: [ProviderLink] {
-        [
-            ProviderLink(
-                title: "打开",
-                icon: "arrow.up.forward.app",
-                help: "打开 WorkBuddy"
-            ) {
-                Apps.open(bundleID: "com.tencent.workbuddy.mac", fallback: "/Applications/WorkBuddy.app")
-            },
-            ProviderLink(
-                title: "官网",
-                icon: "globe",
-                help: "打开 WorkBuddy 官网"
-            ) {
-                Apps.openURL("https://www.workbuddy.cn")
-            },
-        ]
-    }
-
-    private var codexLinks: [ProviderLink] {
-        [
-            ProviderLink(
-                title: "打开",
-                icon: "arrow.up.forward.app",
-                help: "打开 ChatGPT"
-            ) {
-                Apps.open(bundleID: "com.openai.codex", fallback: "/Applications/ChatGPT.app")
-            },
-            ProviderLink(
-                title: "官网",
-                icon: "globe",
-                help: "打开 Codex 官网"
-            ) {
-                Apps.openURL("https://openai.com/codex/")
-            },
-        ]
-    }
-
     private func settingRow<Chips: View>(
         _ label: String,
         @ViewBuilder chips: () -> Chips
@@ -3149,27 +2994,15 @@ struct MenuContent: View {
             }
         }
         settingRow("菜单栏") {
-            settingChip(
-                "Qoder",
-                isOn: $store.showQoderInMenuBar,
-                iconOn: "eye.fill",
-                iconOff: "eye.slash",
-                help: "在菜单栏显示 Qoder"
-            )
-            settingChip(
-                "WorkBuddy",
-                isOn: $store.showWorkBuddyInMenuBar,
-                iconOn: "eye.fill",
-                iconOff: "eye.slash",
-                help: "在菜单栏显示 WorkBuddy"
-            )
-            settingChip(
-                "Codex",
-                isOn: $store.showCodexInMenuBar,
-                iconOn: "eye.fill",
-                iconOff: "eye.slash",
-                help: "在菜单栏显示 Codex"
-            )
+            ForEach(Providers.ordered, id: \.id) { descriptor in
+                settingChip(
+                    descriptor.displayName,
+                    isOn: store.menuBarBinding(for: descriptor.id),
+                    iconOn: "eye.fill",
+                    iconOff: "eye.slash",
+                    help: "在菜单栏显示 \(descriptor.displayName)"
+                )
+            }
         }
         settingRow("注意力") {
             settingChip(
@@ -3191,27 +3024,25 @@ struct MenuContent: View {
 
     private var reminderSettings: some View {
         settingRow("提醒") {
-            settingChip(
-                "Qoder",
-                isOn: $store.remindQoderClaim,
-                iconOn: "bell.fill",
-                iconOff: "bell.slash",
-                help: "每天 10:00 提醒领取 Qoder 100 Credits"
-            )
-            settingChip(
-                "WorkBuddy",
-                isOn: $store.remindWorkBuddyClaim,
-                iconOn: "bell.fill",
-                iconOff: "bell.slash",
-                help: "每天 00:00 提醒领取 WorkBuddy 100 积分"
-            )
-            settingChip(
-                "Codex",
-                isOn: $store.remindCodexReset,
-                iconOn: "bell.fill",
-                iconOff: "bell.slash",
-                help: "Codex 额度重置时提醒"
-            )
+            ForEach(Providers.ordered, id: \.id) { descriptor in
+                settingChip(
+                    descriptor.displayName,
+                    isOn: store.reminderBinding(for: descriptor.id),
+                    iconOn: "bell.fill",
+                    iconOff: "bell.slash",
+                    help: reminderHelp(descriptor)
+                )
+            }
+        }
+    }
+
+    /// 提醒开关的说明文字直接由注册表里的提醒形态拼出来，避免两处文案各写一份。
+    private func reminderHelp(_ descriptor: ProviderDescriptor) -> String {
+        switch descriptor.claimReminder {
+        case .daily(let hour, let grant, _):
+            return "每天 \(String(format: "%02d", hour)):00 提醒领取 \(descriptor.displayName) \(grant)"
+        case .windowReset:
+            return "\(descriptor.displayName) 额度重置时提醒"
         }
     }
 

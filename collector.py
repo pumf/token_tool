@@ -768,14 +768,24 @@ def qoder_login_status():
 
 # ---------------------------------------------------------------- main
 
+# 采集入口与分组。分组与 Swift 侧 Providers 注册表的刷新节奏一一对应：
+# "fast" 是本地 IPC/子进程较慢的几家共用的一次采集，qoder 走 CLI 单独一档。
+# 顺序即 JSON 里 providers 的写出顺序，保持与旧版本一致。
+COLLECTORS = {
+    "codex": collect_codex,
+    "workbuddy": collect_workbuddy,
+    "qoder": collect_qoder,
+}
+
+GROUPS = {
+    "fast": ("codex", "workbuddy"),
+    "qoder": ("qoder",),
+}
+
+
 def collect(provider):
-    funcs = {
-        "codex": collect_codex,
-        "workbuddy": collect_workbuddy,
-        "qoder": collect_qoder,
-    }
     try:
-        return funcs[provider]()
+        return COLLECTORS[provider]()
     except Exception as exc:
         return fail(exc)
 
@@ -789,7 +799,11 @@ QODER_ACTIONS = {
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", default="all", choices=["all", "fast", "codex", "workbuddy", "qoder"])
+    parser.add_argument(
+        "--provider",
+        default="all",
+        choices=["all", "fast"] + list(COLLECTORS),
+    )
     parser.add_argument("--action", default=None, choices=sorted(QODER_ACTIONS))
     args = parser.parse_args()
     if args.action:
@@ -802,13 +816,10 @@ def main():
             ensure_ascii=False,
         ))
         return
-    providers = []
-    if args.provider in ("all", "fast", "codex"):
-        providers.append("codex")
-    if args.provider in ("all", "fast", "workbuddy"):
-        providers.append("workbuddy")
-    if args.provider in ("all", "qoder"):
-        providers.append("qoder")
+    if args.provider == "all":
+        providers = list(COLLECTORS)
+    else:
+        providers = list(GROUPS.get(args.provider, (args.provider,)))
     result = {"version": 1, "updatedAt": int(time.time()), "providers": {}}
     if len(providers) > 1:
         with ThreadPoolExecutor(max_workers=len(providers)) as pool:

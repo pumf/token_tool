@@ -214,10 +214,10 @@ open build/TokenTool.app
 三个应用包均包含图标与采集器，并完成 ad-hoc 签名。
 
 ```bash
-./test.sh    # 编译并运行 Analytics 回归测试（零依赖，无需 Xcode）
+./test.sh    # 编译并运行回归测试（零依赖，无需 Xcode）
 ```
 
-`Analytics.swift` 里的用量洞察与耗尽预测是最容易改坏的纯函数——领取回补不能算成消耗、天级以上的 Codex 窗口不能按小时速率外推、跨重置周期的样本要剔除。测试用固定时钟（当天 12:00）构造样本序列，逐条锁住这些口径；GitHub Actions 在每次 push / PR 上运行同一份 `test.sh`，并额外完成三架构打包。
+`Analytics.swift` 里的用量洞察与耗尽预测是最容易改坏的纯函数——领取回补不能算成消耗、天级以上的 Codex 窗口不能按小时速率外推、跨重置周期的样本要剔除。测试用固定时钟（当天 12:00）构造样本序列，逐条锁住这些口径；`Providers.swift` 注册表锁住既有的展示顺序、采集节奏与 UserDefaults 键名，`Persistence.swift` 锁住旧版 `cache.json` / `history.json` 的兼容读取。GitHub Actions 在每次 push / PR 上运行同一份 `test.sh`，并额外完成三架构打包。
 
 如需产出发布用的安装包与校验文件：
 
@@ -255,6 +255,7 @@ open /Applications/TokenTool.app
   ~/Library/Application Support/TokenTool/history.json
   ~/Library/Application Support/TokenTool/history.json.bak
   ```
+- 两个文件都带 `version` 字段，内容按供应商键存放；没有版本号的旧格式（固定三个键）仍然能直接读出，写出时才升级成新格式，升级或回滚都不会丢历史。
 - `history.json` 每次覆盖前会轮换出 `history.json.bak`；主文件损坏时自动回退备份，坏文件改名为 `history.corrupt-<时间戳>.json` 保留供排查（只留最近两份），不会用空数据覆盖唯一证据。
 - 诊断日志路径为 `~/Library/Application Support/TokenTool/logs/diagnostics.log`，只记录采集失败、历史 / 缓存读写异常、告警触发与更新下载结果；写盘前统一脱敏（token、授权链接参数、长串随机值），不含凭据、账号标识或额度明细。单文件上限 256 KB，超限自动丢弃前半段。
 - 历史快照最多保留 14 天，用于趋势与耗尽预测；不包含任何账号凭据。
@@ -296,8 +297,11 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 .
 ├── TokenToolApp.swift   # NSStatusItem + NSPopover 入口，无 Dock 图标
-├── Views.swift          # 菜单栏标签、详情面板、数据状态、通知与刷新调度
+├── Providers.swift      # 供应商注册表：名称、口径、采集节奏、客户端与开关键名
+├── Views.swift          # 菜单栏标签、详情面板、按供应商索引的数据状态与刷新调度
+├── Persistence.swift    # cache.json / history.json 的版本化读写与旧格式兼容
 ├── Analytics.swift      # 历史采样、趋势与耗尽预测、加速检测、用量洞察
+├── Export.swift         # 用量历史 CSV 导出
 ├── Update.swift         # GitHub Releases 版本检查、安装包匹配与下载
 ├── Diagnostics.swift    # 本地诊断日志（脱敏、256 KB 轮换）
 ├── collector.py         # Codex / WorkBuddy / Qoder 本地数据采集器
@@ -306,8 +310,8 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── Info.plist           # 应用元数据（LSUIElement / 图标 / 版本号）
 ├── build.sh             # arm64 / x86_64 / 通用版本构建与 ad-hoc 签名
 ├── package.sh           # 产出六个安装包与 SHA256SUMS 校验文件
-├── test.sh              # 编译并运行 Analytics 回归测试
-├── Tests/               # 预测与洞察口径的回归测试
+├── test.sh              # 编译并运行回归测试
+├── Tests/               # 预测口径、供应商注册表与本地数据格式的回归测试
 ├── .github/workflows/   # CI：回归测试 + 三架构打包产物
 ├── docs/screenshots/    # README 界面截图（演示数据）
 └── README.md

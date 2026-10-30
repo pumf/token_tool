@@ -3,11 +3,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum UsageExport {
-    static func csv(
-        qoder: [UsageSample],
-        workbuddy: [UsageSample],
-        codex: [UsageSample]
-    ) -> String {
+    /// 按注册表顺序导出各家历史；未注册的供应商不参与，导出列结构保持不变。
+    static func csv(_ samples: [UsageProvider: [UsageSample]]) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         formatter.timeZone = .current
@@ -26,8 +23,8 @@ enum UsageExport {
             return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
         }
 
-        func append(_ provider: UsageProvider, _ samples: [UsageSample]) {
-            for sample in samples {
+        func append(_ provider: UsageProvider, _ history: [UsageSample]) {
+            for sample in history {
                 let timestamp = time(sample.at)
                 if let windows = sample.windows, !windows.isEmpty {
                     for window in windows {
@@ -59,18 +56,14 @@ enum UsageExport {
             }
         }
 
-        append(.qoder, qoder)
-        append(.workbuddy, workbuddy)
-        append(.codex, codex)
+        for descriptor in Providers.ordered {
+            append(descriptor.id, samples[descriptor.id] ?? [])
+        }
         return rows.joined(separator: "\n") + "\n"
     }
 
     @MainActor
-    static func save(
-        qoder: [UsageSample],
-        workbuddy: [UsageSample],
-        codex: [UsageSample]
-    ) {
+    static func save(_ samples: [UsageProvider: [UsageSample]]) {
         let panel = NSSavePanel()
         panel.title = "导出用量历史"
         panel.nameFieldStringValue = "TokenTool-usage-\(dateStamp()).csv"
@@ -79,7 +72,7 @@ enum UsageExport {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        let content = csv(qoder: qoder, workbuddy: workbuddy, codex: codex)
+        let content = csv(samples)
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
             NSWorkspace.shared.activateFileViewerSelecting([url])
