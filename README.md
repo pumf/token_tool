@@ -183,7 +183,9 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
 1. 下载与芯片匹配的 DMG 或 ZIP。
-2. 打开 DMG，将 **TokenTool** 拖入「应用程序」；ZIP 则解压后拖入。
+2. 打开 DMG，窗口里有 **TokenTool.app** 和一个「应用程序」快捷方式，把 TokenTool **拖到旁边的「Applications」图标上**；ZIP 则解压后把 TokenTool.app 手动拷进 `/Applications`。
+   - 不要直接在 DMG 卷宗（或「下载」目录）里双击运行：那样应用每次都要重新授权、也不会覆盖已有安装，看起来像「装不上」。
+   - v1.6.0 及更早的包内应用名带架构后缀（`TokenTool-x86_64.app` / `TokenTool-arm64.app`），拖进去会和已有的 TokenTool 并存而不是升级。若之前装过，先删掉 `/Applications` 里那个带后缀的副本，再装新版。
 3. 首次启动若被 macOS 拦截（应用为本地构建，未使用 Developer ID 签名与公证），请：
    - 在「应用程序」中右键 TokenTool →「打开」→ 再次确认「打开」；或
    - 执行：

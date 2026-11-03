@@ -20,8 +20,18 @@ package() {
     local app="$1"
     local suffix="$2"
     local base="TokenTool-${VERSION}${suffix}"
-    hdiutil create -quiet -volname TokenTool -srcfolder "$app" -ov -format UDZO "$OUT/${base}.dmg"
-    ditto -c -k --keepParent "$app" "$OUT/${base}.zip"
+    local stage="$OUT/stage${suffix:-universal}"
+    # 卷宗与压缩包里一律叫 TokenTool.app：带架构后缀的名字会让用户以为装了第二个应用，
+    # 拖进「应用程序」也不会覆盖已有的 TokenTool，更新时找不到正确的那一份。
+    rm -rf "$stage"
+    mkdir -p "$stage"
+    ditto "$app" "$stage/TokenTool.app"
+    # 没有这个软链接，DMG 窗口里就没有「拖到 Applications」的目标，只能自己另开 Finder。
+    ln -s /Applications "$stage/Applications"
+    codesign --verify --deep --strict "$stage/TokenTool.app"
+    hdiutil create -quiet -volname TokenTool -srcfolder "$stage" -ov -format UDZO "$OUT/${base}.dmg"
+    ditto -c -k --keepParent "$stage/TokenTool.app" "$OUT/${base}.zip"
+    rm -rf "$stage"
 }
 
 package build/TokenTool-arm64.app -arm64
