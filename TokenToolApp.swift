@@ -170,11 +170,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func updateTitle() {
         guard let button = statusItem.button else { return }
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-        var text = store.menuBarText
+        var title = store.menuBarText(for: store.menuBarStyle) {
+            NSAttributedString(string: $0, attributes: [.font: font]).size().width
+        }
         var color = NSColor.labelColor
         let kind = store.attentionKind
         if store.menuBarHighlight, !store.isAttentionMuted, kind != .none {
-            text = (kind == .warning ? "⚠ " : "＋ ") + text
+            title = (kind == .warning ? "⚠ " : "＋ ") + title
             color = kind == .warning ? .systemRed : .systemOrange
             if blinkDimmed { color = color.withAlphaComponent(0.25) }
         }
@@ -187,7 +189,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             button.imagePosition = .noImage
         }
         button.attributedTitle = NSAttributedString(
-            string: text,
+            string: title,
             attributes: [
                 .font: font,
                 .foregroundColor: color,

@@ -202,8 +202,49 @@ struct AnalyticsSuite {
             expectClose(insight?.todayConsumed, 50)
             expectNil(insight?.dailyAverage)
             expectNil(insight?.netDailyAverage)
+            expectNil(insight?.yesterdayConsumed)
             expectEqual(insight?.observedDays, 1)
             expectEqual(insight?.isPercent, false)
+        }
+        test("昨日同时段只算昨天 00:00 到此刻那段") {
+            // 昨天每小时掉 50（00:00→12:00 共 600），今天每小时掉 10（00:00→12:00 共 120）。
+            let samples = (0...36).map { hour -> UsageSample in
+                let consumed = Double(hour) <= 24
+                    ? Double(hour) * 50
+                    : 1200 + (Double(hour) - 24) * 10
+                return creditSample(at: offset(-36 + Double(hour)), remaining: 2600 - consumed)
+            }
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 1280), samples: samples, now: noon
+            )
+            expectClose(insight?.yesterdayConsumed, 600)
+            expectClose(insight?.todayConsumed, 120)
+        }
+        test("昨日同时段里领取回补不计入，跨零点的样本对不算昨天") {
+            let samples = [
+                creditSample(at: offset(-36), remaining: 1000),
+                creditSample(at: offset(-30), remaining: 400),
+                creditSample(at: offset(-24), remaining: 900),   // 07 领取回补 500
+                creditSample(at: offset(-12), remaining: 800),   // 正好跨到今天 00:00
+                creditSample(at: offset(0), remaining: 700),
+            ]
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 700), samples: samples, now: noon
+            )
+            expectClose(insight?.yesterdayConsumed, 600)
+            expectClose(insight?.todayConsumed, 100)
+        }
+        test("昨天没采满时不给昨日参照") {
+            // 昨天合盖到下午才开机，昨天那段一个样本都没有，硬给「昨天用了 X」会低估。
+            let samples = (0...20).map { hour -> UsageSample in
+                creditSample(at: offset(-21 + Double(hour)), remaining: 2000 - Double(hour) * 30)
+            }
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 1400), samples: samples, now: noon
+            )
+            expectNotNil(insight)
+            expectNil(insight?.yesterdayConsumed)
+            expectClose(insight?.todayConsumed, 330)
         }
         test("没有样本时不给洞察") {
             let insight = UsageAnalytics.insight(
@@ -706,10 +747,23 @@ struct AnalyticsSuite {
         )
         test("数字样式滚动到今日时加下降标识，没有今日数据的平台继续显示剩余") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: false), "Q 1,870   C 58%")
-            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: true), "Q ↓320   C 58%")
+            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: true), "Q  ↓320   C 58%")
         }
         test("紧凑样式滚动时用缩写") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .compact, showsToday: true), "Q↓320 C58%")
+        }
+        test("滚动两拍的整行宽度一致，菜单栏不会因切拍左右跳") {
+            // 模拟菜单栏字体宽度：数字与逗号 6pt、箭头 10pt、空格 3pt。
+            let widthOf: (String) -> CGFloat = { text in
+                text.reduce(CGFloat(0)) { sum, ch in sum + (ch == "↓" ? 10 : ch == " " ? 3 : 6) }
+            }
+            let remaining = MenuBarText.compose([credits, noToday], style: .classic, showsToday: false, widthOf: widthOf)
+            let today = MenuBarText.compose([credits, noToday], style: .classic, showsToday: true, widthOf: widthOf)
+            // 补位空格落在字母与数值之间：`Q 1,870`(39pt) 和 `Q  ↓320`(40pt) 各占同一格，
+            // 差值只可能来自一个空格的取整，而不是原来 5pt 的整段位移。
+            expectEqual(today, "Q  ↓320   C 58%")
+            check(abs(widthOf(today) - widthOf(remaining)) <= 3,
+                  "两拍行宽相差 \(abs(widthOf(today) - widthOf(remaining)))pt，超过一个空格")
         }
         test("条形样式不参与滚动，仍是剩余比例") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .bars, showsToday: true), "94% 58%")

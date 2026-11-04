@@ -2070,20 +2070,59 @@ struct MenuBarMetric {
 
 /// 菜单栏文案的组合规则，单独抽出来便于回归测试。
 enum MenuBarText {
-    /// 滚动到「今日」时给一个下降标识；拿不到今日数据的平台继续显示剩余，两种含义靠箭头条区分。
-    static func compose(_ metrics: [MenuBarMetric], style: MenuBarStyle, showsToday: Bool) -> String {
+    /// 按字符数估算宽度，测试和没有字体环境时用；应用侧传入按菜单栏字体实测的宽度。
+    static func estimatedWidth(_ text: String) -> CGFloat { CGFloat(text.count) }
+
+    /// 每个平台占位到「剩余」与「今日」两拍里较宽的一拍，补的空格插在字母和数值之间：
+    /// `Q 2,649` 换成 `Q  ↓139` 时后面的平台不左右跳，整行宽度也不呼吸（菜单栏项靠右对齐，
+    /// 行宽一变整串文字就平移），数值顺带右对齐。
+    static func compose(
+        _ metrics: [MenuBarMetric],
+        style: MenuBarStyle,
+        showsToday: Bool,
+        widthOf: (String) -> CGFloat = estimatedWidth
+    ) -> String {
         guard !metrics.isEmpty else { return "AI" }
+        let baseline = metrics.map { segment(for: $0, style: style, showsToday: false) }
+        let rolled = metrics.map { segment(for: $0, style: style, showsToday: true) }
+        let current = showsToday ? rolled : baseline
+        let slots = zip(baseline, rolled).map { max(widthOf($0.lead + $0.value), widthOf($1.lead + $1.value)) }
+        let separator = style == .classic ? "   " : " "
+        let separatorWidth = widthOf(separator)
+        let spaceWidth = max(widthOf(" "), 0.0001)
+        var line = ""
+        var cursor: CGFloat = 0
+        var ideal: CGFloat = 0
+        for (index, part) in current.enumerated() {
+            if index > 0 {
+                line += separator
+                cursor += separatorWidth
+                ideal += separatorWidth
+            }
+            ideal += slots[index]
+            let text = part.lead + part.value
+            let fill = max(0, Int(((ideal - cursor - widthOf(text)) / spaceWidth).rounded()))
+            let padded = part.lead + String(repeating: " ", count: fill) + part.value
+            line += padded
+            cursor += widthOf(padded)
+        }
+        return line
+    }
+
+    /// 滚动到「今日」时给一个下降标识；拿不到今日数据的平台继续显示剩余，两种含义靠箭头条区分。
+    /// lead 与 value 分开返回，补位空格才插得进两者中间。
+    private static func segment(
+        for metric: MenuBarMetric,
+        style: MenuBarStyle,
+        showsToday: Bool
+    ) -> (lead: String, value: String) {
         switch style {
         case .classic:
-            return metrics.map { metric in
-                "\(metric.letter) \(showsToday ? metric.rolledValue : metric.value)"
-            }.joined(separator: "   ")
+            return (lead: "\(metric.letter) ", value: showsToday ? metric.rolledValue : metric.value)
         case .compact:
-            return metrics.map { metric in
-                "\(metric.letter)\(showsToday ? metric.rolledCompact : metric.compact)"
-            }.joined(separator: " ")
+            return (lead: metric.letter, value: showsToday ? metric.rolledCompact : metric.compact)
         case .bars:
-            return metrics.map(\.percent).joined(separator: " ")
+            return (lead: "", value: metric.percent)
         }
     }
 }
@@ -2207,11 +2246,9 @@ extension UsageStore {
         menuBarShowsToday = showsToday && menuBarRollAvailable
     }
 
-    func menuBarText(for style: MenuBarStyle) -> String {
-        MenuBarText.compose(menuBarMetrics, style: style, showsToday: menuBarShowsToday)
+    func menuBarText(for style: MenuBarStyle, widthOf: (String) -> CGFloat = MenuBarText.estimatedWidth) -> String {
+        MenuBarText.compose(menuBarMetrics, style: style, showsToday: menuBarShowsToday, widthOf: widthOf)
     }
-
-    var menuBarText: String { menuBarText(for: menuBarStyle) }
 
     private func percentOf(_ remaining: Double?, over total: Double) -> Double? {
         guard let remaining, total > 0 else { return nil }
@@ -2654,11 +2691,16 @@ struct MenuContent: View {
     }
 
     /// 简单模式更关心「今天用了多少」，今日消耗并进剩余量那一行；口径与常规模式的洞察行一致。
+    /// 单看今日判断不了多不多，所以带上昨天同时段做参照；昨天没采满时只显示今日。
     private func cardTodayValue(_ provider: UsageProvider) -> String? {
         guard let insight = store.insight(for: provider), let today = insight.todayConsumed else { return nil }
-        return insight.isPercent
-            ? insightValue(today, percent: true)
-            : Format.credits(today)
+        let current = consumptionText(today, percent: insight.isPercent)
+        guard let yesterday = insight.yesterdayConsumed else { return current }
+        return "\(current) · 昨天 \(consumptionText(yesterday, percent: insight.isPercent))"
+    }
+
+    private func consumptionText(_ value: Double, percent: Bool) -> String {
+        percent ? Format.percentDetailed(value) : Format.credits(value)
     }
 
     private func cardFooter(_ provider: UsageProvider) -> String {
