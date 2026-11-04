@@ -747,7 +747,7 @@ struct AnalyticsSuite {
         )
         test("数字样式滚动到今日时加下降标识，没有今日数据的平台继续显示剩余") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: false), "Q 1,870   C 58%")
-            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: true), "Q  ↓320   C 58%")
+            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: true), "Q ↓320    C 58%")
         }
         test("紧凑样式滚动时用缩写") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .compact, showsToday: true), "Q↓320 C58%")
@@ -759,11 +759,26 @@ struct AnalyticsSuite {
             }
             let remaining = MenuBarText.compose([credits, noToday], style: .classic, showsToday: false, widthOf: widthOf)
             let today = MenuBarText.compose([credits, noToday], style: .classic, showsToday: true, widthOf: widthOf)
-            // 补位空格落在字母与数值之间：`Q 1,870`(39pt) 和 `Q  ↓320`(40pt) 各占同一格，
+            // 补位空格落在字母与数值之间：`Q 1,870`(39pt) 和 `Q ↓320`(40pt) 各占同一格，
             // 差值只可能来自一个空格的取整，而不是原来 5pt 的整段位移。
-            expectEqual(today, "Q  ↓320   C 58%")
+            expectEqual(today, "Q ↓320    C 58%")
             check(abs(widthOf(today) - widthOf(remaining)) <= 3,
                   "两拍行宽相差 \(abs(widthOf(today) - widthOf(remaining)))pt，超过一个空格")
+            // 差得多的时候左右各补一半：字母钉在组左端，数值居中，组宽仍等于「W 12,345」。
+            let wide = MenuBarMetric(
+                letter: "W",
+                value: "12,345",
+                compact: "12.3k",
+                percent: "50%",
+                today: "3",
+                todayCompact: "3",
+                fraction: 0.5,
+                tint: Theme.qoder
+            )
+            expectEqual(
+                MenuBarText.compose([wide], style: .classic, showsToday: true, widthOf: widthOf),
+                "W" + String(repeating: " ", count: 4) + "↓3" + String(repeating: " ", count: 4)
+            )
         }
         test("条形样式不参与滚动，仍是剩余比例") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .bars, showsToday: true), "94% 58%")

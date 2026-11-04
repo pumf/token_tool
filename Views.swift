@@ -2073,9 +2073,9 @@ enum MenuBarText {
     /// 按字符数估算宽度，测试和没有字体环境时用；应用侧传入按菜单栏字体实测的宽度。
     static func estimatedWidth(_ text: String) -> CGFloat { CGFloat(text.count) }
 
-    /// 每个平台占位到「剩余」与「今日」两拍里较宽的一拍，补的空格插在字母和数值之间：
-    /// `Q 2,649` 换成 `Q  ↓139` 时后面的平台不左右跳，整行宽度也不呼吸（菜单栏项靠右对齐，
-    /// 行宽一变整串文字就平移），数值顺带右对齐。
+    /// 每个平台占位到「剩余」与「今日」两拍里较宽的一拍，多出来的空格按左右半分（字母钉在组左端，
+    /// 数值在组内居中）：`Q 2,649` 换成 `Q ↓139  ` 时后面的平台不左右跳，整行宽度也不呼吸
+    /// （菜单栏项靠右对齐，行宽一变整串文字就平移）。
     static func compose(
         _ metrics: [MenuBarMetric],
         style: MenuBarStyle,
@@ -2102,7 +2102,9 @@ enum MenuBarText {
             ideal += slots[index]
             let text = part.lead + part.value
             let fill = max(0, Int(((ideal - cursor - widthOf(text)) / spaceWidth).rounded()))
-            let padded = part.lead + String(repeating: " ", count: fill) + part.value
+            let head = fill / 2
+            let tail = String(repeating: " ", count: fill - head)
+            let padded = part.lead + String(repeating: " ", count: head) + part.value + tail
             line += padded
             cursor += widthOf(padded)
         }
