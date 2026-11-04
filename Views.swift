@@ -438,6 +438,9 @@ final class UsageStore: ObservableObject {
     /// 菜单栏显示与领取提醒的开关；落盘键名由注册表登记，保持与旧版本一致。
     @Published private var menuBarVisibility: [UsageProvider: Bool] = [:]
     @Published private var reminderVisibility: [UsageProvider: Bool] = [:]
+    /// 菜单栏当前显示的是剩余量还是今日消耗，由应用侧的滚动定时器翻转。
+    /// 有意不做 @Published：滚动只影响菜单栏标题，由定时器自己重绘，避免每 5 秒触发一次面板测量。
+    private(set) var menuBarShowsToday = false
     @Published private(set) var launchAtLogin = LaunchAtLogin.isEnabled
     @Published var alertLowBalance: Bool {
         didSet {
@@ -1634,6 +1637,12 @@ enum Format {
         return "\(Int(value.rounded()))%"
     }
 
+    /// 今日消耗这类小数值：不足 10% 时保留一位小数，否则取整，避免 0.4% 被显示成 0%。
+    static func percentDetailed(_ value: Double?) -> String {
+        guard let value, value > 0, value < 10 else { return percent(value) }
+        return String(format: "%.1f%%", value)
+    }
+
     static func ago(_ date: Date?) -> String {
         guard let date else { return "从未" }
         let seconds = max(0, Date().timeIntervalSince(date))
@@ -1841,6 +1850,7 @@ struct ProviderCard<Detail: View>: View {
     let plan: String?
     let value: String
     let valueCaption: String
+    let secondaryValue: String?
     let status: String?
     let footer: String
     let links: [ProviderLink]
@@ -1855,6 +1865,7 @@ struct ProviderCard<Detail: View>: View {
         plan: String? = nil,
         value: String,
         valueCaption: String,
+        secondaryValue: String? = nil,
         status: String? = nil,
         footer: String,
         links: [ProviderLink] = [],
@@ -1868,6 +1879,7 @@ struct ProviderCard<Detail: View>: View {
         self.plan = plan
         self.value = value
         self.valueCaption = valueCaption
+        self.secondaryValue = secondaryValue
         self.status = status
         self.footer = footer
         self.links = links
@@ -1915,6 +1927,18 @@ struct ProviderCard<Detail: View>: View {
                     .monospacedDigit()
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                if let secondaryValue {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Image(systemName: "arrow.down.right")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("今日 \(secondaryValue)")
+                            .font(.system(size: 13, weight: .medium))
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .help("今日消耗 \(secondaryValue)，按本机历史采样估算；领取或重置带来的增加不计入消耗")
+                }
                 Spacer(minLength: Token.spaceTight)
                 Text(valueCaption)
                     .font(Token.caption)
@@ -2037,8 +2061,36 @@ struct MenuBarMetric {
     let value: String
     let compact: String
     let percent: String
+    /// 今日消耗，与 value 同口径（积分平台是积分数，百分比平台是百分点）；样本不足时为 nil。
+    let today: String?
+    let todayCompact: String?
     let fraction: Double?
     let tint: Color
+}
+
+/// 菜单栏文案的组合规则，单独抽出来便于回归测试。
+enum MenuBarText {
+    /// 滚动到「今日」时给一个下降标识；拿不到今日数据的平台继续显示剩余，两种含义靠箭头条区分。
+    static func compose(_ metrics: [MenuBarMetric], style: MenuBarStyle, showsToday: Bool) -> String {
+        guard !metrics.isEmpty else { return "AI" }
+        switch style {
+        case .classic:
+            return metrics.map { metric in
+                "\(metric.letter) \(showsToday ? metric.rolledValue : metric.value)"
+            }.joined(separator: "   ")
+        case .compact:
+            return metrics.map { metric in
+                "\(metric.letter)\(showsToday ? metric.rolledCompact : metric.compact)"
+            }.joined(separator: " ")
+        case .bars:
+            return metrics.map(\.percent).joined(separator: " ")
+        }
+    }
+}
+
+extension MenuBarMetric {
+    var rolledValue: String { today.map { "↓\($0)" } ?? value }
+    var rolledCompact: String { todayCompact.map { "↓\($0)" } ?? compact }
 }
 
 /// 条形样式左侧的小图：每个平台一列竖条，按品牌色从底部填充剩余比例。
@@ -2130,27 +2182,33 @@ extension UsageStore {
             value = Format.credits(remaining)
             compact = Format.compact(remaining)
         }
+        let consumed = insight(for: descriptor.id)?.todayConsumed
+        let today = consumed.map { descriptor.isPercent ? Format.percentDetailed($0) : Format.credits($0) }
+        // 紧凑样式里今日消耗取整：136.9 这种小数在菜单栏那么小的字号上没有意义。
+        let todayCompact = consumed.map { descriptor.isPercent ? Format.percentDetailed($0) : Format.compact($0.rounded()) }
         return MenuBarMetric(
             letter: descriptor.menuBarLetter,
             value: value,
             compact: compact,
             percent: Format.percent(percent),
+            today: today,
+            todayCompact: todayCompact,
             fraction: fractionOf(percent),
             tint: descriptor.color
         )
     }
 
+    /// 只有数字类样式能滚动：条形样式画的是剩余比例，换成今日消耗会让竖条和文案含义分家。
+    var menuBarRollAvailable: Bool {
+        menuBarStyle != .bars && menuBarMetrics.contains { $0.today != nil }
+    }
+
+    func setMenuBarShowsToday(_ showsToday: Bool) {
+        menuBarShowsToday = showsToday && menuBarRollAvailable
+    }
+
     func menuBarText(for style: MenuBarStyle) -> String {
-        let metrics = menuBarMetrics
-        guard !metrics.isEmpty else { return "AI" }
-        switch style {
-        case .classic:
-            return metrics.map { "\($0.letter) \($0.value)" }.joined(separator: "   ")
-        case .compact:
-            return metrics.map { "\($0.letter)\($0.compact)" }.joined(separator: " ")
-        case .bars:
-            return metrics.map(\.percent).joined(separator: " ")
-        }
+        MenuBarText.compose(menuBarMetrics, style: style, showsToday: menuBarShowsToday)
     }
 
     var menuBarText: String { menuBarText(for: menuBarStyle) }
@@ -2562,6 +2620,7 @@ struct MenuContent: View {
             plan: Format.plan(store.result(for: provider)?.plan),
             value: cardValue(provider),
             valueCaption: cardCaption(provider),
+            secondaryValue: store.simpleMode ? cardTodayValue(provider) : nil,
             status: store.error(for: provider),
             footer: cardFooter(provider),
             links: cardLinks(provider),
@@ -2592,6 +2651,14 @@ struct MenuContent: View {
             guard let window = result.primaryWindow else { return "等待采集" }
             return "\(Format.window(window.windowMinutes))窗口剩余"
         }
+    }
+
+    /// 简单模式更关心「今天用了多少」，今日消耗并进剩余量那一行；口径与常规模式的洞察行一致。
+    private func cardTodayValue(_ provider: UsageProvider) -> String? {
+        guard let insight = store.insight(for: provider), let today = insight.todayConsumed else { return nil }
+        return insight.isPercent
+            ? insightValue(today, percent: true)
+            : Format.credits(today)
     }
 
     private func cardFooter(_ provider: UsageProvider) -> String {
@@ -2642,7 +2709,6 @@ struct MenuContent: View {
         let descriptor = provider.descriptor
         if store.simpleMode {
             simpleCreditsBar(provider)
-            simpleTodayRow(provider)
         } else if let result = store.result(for: provider) {
             switch descriptor.creditLayout ?? .resourcePackage {
             case .planBreakdown:
@@ -2758,7 +2824,6 @@ struct MenuContent: View {
         let descriptor = provider.descriptor
         if store.simpleMode {
             simpleWindowBar(provider)
-            simpleTodayRow(provider)
         } else if let result = store.result(for: provider) {
             if let windows = result.windows, !windows.isEmpty {
                 ForEach(windows) { window in
@@ -2918,22 +2983,6 @@ struct MenuContent: View {
         }
     }
 
-    @ViewBuilder
-    private func simpleTodayRow(_ provider: UsageProvider) -> some View {
-        if let insight = store.insight(for: provider), let today = insight.todayConsumed {
-            HStack(spacing: 5) {
-                Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("今日消耗 \(insightValue(today, percent: insight.isPercent))")
-                    .font(Token.meta)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(.secondary)
-            .help("按本机历史采样估算，领取或重置带来的增加不计入消耗。")
-        }
-    }
-
     private func insightText(_ insight: UsageInsight) -> String {
         let today = insight.todayConsumed.map {
             "今日消耗 \(insightValue($0, percent: insight.isPercent))"
@@ -2946,9 +2995,7 @@ struct MenuContent: View {
 
     private func insightValue(_ value: Double, percent: Bool) -> String {
         if percent {
-            return value > 0 && value < 10
-                ? String(format: "%.1f%%", value)
-                : Format.percent(value)
+            return Format.percentDetailed(value)
         }
         return "\(Format.credits(value)) Credits"
     }

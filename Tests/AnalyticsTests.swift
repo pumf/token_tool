@@ -133,6 +133,7 @@ struct AnalyticsSuite {
         runRegistry()
         runPersistence()
         runExport()
+        runMenuBar()
 
         print("\n\(checks) 项断言，\(failures) 项失败")
         exit(failures == 0 ? 0 : 1)
@@ -679,6 +680,63 @@ struct AnalyticsSuite {
             expectContains(rows[1], "2600.00")
             check(rows[2].hasPrefix("codex,"), "第三行应是 Codex，实际「\(rows[2])」")
             expectContains(rows[2], ",300,58.00,42.00,")
+        }
+    }
+
+    static func runMenuBar() {
+        let credits = MenuBarMetric(
+            letter: "Q",
+            value: "1,870",
+            compact: "1.9k",
+            percent: "94%",
+            today: "320",
+            todayCompact: "320",
+            fraction: 0.94,
+            tint: Theme.qoder
+        )
+        let noToday = MenuBarMetric(
+            letter: "C",
+            value: "58%",
+            compact: "58%",
+            percent: "58%",
+            today: nil,
+            todayCompact: nil,
+            fraction: 0.58,
+            tint: Theme.codex
+        )
+        test("数字样式滚动到今日时加下降标识，没有今日数据的平台继续显示剩余") {
+            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: false), "Q 1,870   C 58%")
+            expectEqual(MenuBarText.compose([credits, noToday], style: .classic, showsToday: true), "Q ↓320   C 58%")
+        }
+        test("紧凑样式滚动时用缩写") {
+            expectEqual(MenuBarText.compose([credits, noToday], style: .compact, showsToday: true), "Q↓320 C58%")
+        }
+        test("条形样式不参与滚动，仍是剩余比例") {
+            expectEqual(MenuBarText.compose([credits, noToday], style: .bars, showsToday: true), "94% 58%")
+        }
+        test("全部平台算不出今日消耗时滚动不改变文案") {
+            let metrics = [credits, noToday].map {
+                MenuBarMetric(
+                    letter: $0.letter,
+                    value: $0.value,
+                    compact: $0.compact,
+                    percent: $0.percent,
+                    today: nil,
+                    todayCompact: nil,
+                    fraction: $0.fraction,
+                    tint: $0.tint
+                )
+            }
+            expectEqual(MenuBarText.compose(metrics, style: .classic, showsToday: true), "Q 1,870   C 58%")
+        }
+        test("没有可见平台时显示占位文案") {
+            expectEqual(MenuBarText.compose([], style: .classic, showsToday: true), "AI")
+        }
+        test("今日消耗不足 1% 保留小数，避免显示成 0%") {
+            expectEqual(Format.percentDetailed(0.4), "0.4%")
+            expectEqual(Format.percentDetailed(9.96), "10.0%")
+            expectEqual(Format.percentDetailed(42), "42%")
+            expectEqual(Format.percentDetailed(nil), "--")
         }
     }
 

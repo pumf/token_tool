@@ -79,6 +79,8 @@ enum UsageAnalytics {
     /// 新提醒出现后菜单栏闪动的时长。
     static let attentionBlinkDuration: TimeInterval = 60
     static let attentionBlinkInterval: TimeInterval = 0.6
+    /// 菜单栏在剩余量与今日消耗之间滚动的间隔。
+    static let menuBarRollInterval: TimeInterval = 5
     static let rampCooldown: TimeInterval = 6 * 3600
     static let rateWindow: TimeInterval = 3600
     static let minimumRateSpan: TimeInterval = 240

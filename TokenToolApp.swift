@@ -90,6 +90,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var measuredPanelHeight: CGFloat = 0
     private var blinkTimer: Timer?
     private var blinkDimmed = false
+    private var rollTimer: Timer?
 
     init(store: UsageStore, updates: UpdateChecker) {
         self.store = store
@@ -119,6 +120,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 DispatchQueue.main.async {
                     self?.updateTitle()
                     self?.syncBlink()
+                    self?.syncRoll()
                     self?.resizeIfNeeded()
                 }
             }
@@ -139,6 +141,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         applyMaxHeightIfNeeded()
         updateTitle()
         syncBlink()
+        syncRoll()
         updateContentSize()
     }
 
@@ -219,6 +222,37 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         blinkTimer = nil
         if blinkDimmed {
             blinkDimmed = false
+            updateTitle()
+        }
+    }
+
+    /// 菜单栏在剩余量与今日消耗之间滚动；今日数据或样式不满足条件时回到只显示剩余。
+    private func syncRoll() {
+        if store.menuBarRollAvailable {
+            guard rollTimer == nil else { return }
+            let timer = Timer(timeInterval: UsageAnalytics.menuBarRollInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.store.menuBarRollAvailable else {
+                        self.stopRoll()
+                        return
+                    }
+                    self.store.setMenuBarShowsToday(!self.store.menuBarShowsToday)
+                    self.updateTitle()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            rollTimer = timer
+        } else {
+            stopRoll()
+        }
+    }
+
+    private func stopRoll() {
+        rollTimer?.invalidate()
+        rollTimer = nil
+        if store.menuBarShowsToday {
+            store.setMenuBarShowsToday(false)
             updateTitle()
         }
     }
