@@ -803,7 +803,7 @@ final class UsageStore: ObservableObject {
             provider: provider,
             kind: .claim,
             icon: "gift.fill",
-            title: "\(provider.displayName) 今日 \(grant) 待领取",
+            title: "\(provider.displayName) 今日 \(grant)待领取",
             detail: "领取成功后此提示会自动消失；今天不需要可先忽略。",
             actionTitle: "打开 \(provider.descriptor.clientName)",
             canDismiss: true
@@ -1108,7 +1108,7 @@ final class UsageStore: ObservableObject {
             case let .daily(hour, grant, body):
                 addDailyReminder(
                     id: descriptor.reminderDefaultsKey,
-                    title: "\(descriptor.displayName) 今日 \(grant) 可领取",
+                    title: "\(descriptor.displayName) 今日 \(grant)可领取",
                     body: body,
                     hour: hour,
                     minute: 0,
@@ -1382,7 +1382,7 @@ final class UsageStore: ObservableObject {
         } else {
             title = "\(provider.displayName) 剩余低于 \(threshold)%"
             if let remaining = input.remaining {
-                body = "当前剩余 \(Format.credits(remaining)) Credits（\(rounded)%），请及时领取或调整使用。"
+                body = "当前剩余 \(Format.credits(remaining)) 额度（\(rounded)%），请及时领取或调整使用。"
             } else {
                 body = "当前剩余 \(rounded)%，请及时领取或调整使用。"
             }
@@ -2779,7 +2779,7 @@ struct MenuContent: View {
                     )
                 }
                 if addonTotal == 0 && planTotal == 0 {
-                    Text("当前套餐未包含 Credits")
+                    Text("当前套餐未包含额度")
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
@@ -2793,7 +2793,7 @@ struct MenuContent: View {
             case .resourcePackage:
                 if let total = result.total, total > 0 {
                     UsageBar(
-                        label: "Credits",
+                        label: "额度",
                         detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
                         fraction: (result.usedPercent ?? 0) / 100,
                         tint: descriptor.color
@@ -2806,7 +2806,7 @@ struct MenuContent: View {
                     insightRow(provider)
                     forecastRow(provider, tint: descriptor.color)
                 } else {
-                    Text("暂无可用的 Credits 资源包")
+                    Text("暂无可用的额度资源包")
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
@@ -2842,20 +2842,20 @@ struct MenuContent: View {
                         tint: descriptor.color
                     )
                 } else {
-                    Text("当前套餐未包含 Credits")
+                    Text("当前套餐未包含额度")
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
             case .resourcePackage:
                 if let total = result.total, total > 0 {
                     UsageBar(
-                        label: "Credits",
+                        label: "额度",
                         detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
                         fraction: (result.usedPercent ?? 0) / 100,
                         tint: descriptor.color
                     )
                 } else {
-                    Text("暂无可用的 Credits 资源包")
+                    Text("暂无可用的额度资源包")
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
@@ -2891,7 +2891,7 @@ struct MenuContent: View {
                     .foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
-                Text("额外 Credits")
+                Text("额外额度")
                 Spacer()
                 if let credits = result.credits, credits.hasCredits == true {
                     Text(credits.unlimited == true ? "无限" : "余额 \(Format.credits(credits.balance, digits: 2))")
@@ -3043,7 +3043,7 @@ struct MenuContent: View {
         if percent {
             return Format.percentDetailed(value)
         }
-        return "\(Format.credits(value)) Credits"
+        return "\(Format.credits(value)) 额度"
     }
 
     private var emptyContent: some View {

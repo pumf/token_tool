@@ -383,7 +383,7 @@ enum UsageAnalytics {
         let reclaimed = max(0, (dailyAverage - netDaily) * Double(insight.observedDays))
         let sampleNote = insight.observedDays < 3 ? "样本较少，建议多观察几天。" : ""
         if netDaily <= 0.5 {
-            var help = "按已观察 \(insight.observedDays) 天统计：日均消耗约 \(creditText(dailyAverage)) Credits，领取/重置增加约 \(creditText(reclaimed)) Credits，净消耗已不大于 0，暂无耗尽估算。"
+            var help = "按已观察 \(insight.observedDays) 天统计：日均消耗约 \(creditText(dailyAverage)) 额度，领取/重置增加约 \(creditText(reclaimed)) 额度，净消耗已不大于 0，暂无耗尽估算。"
             help += sampleNote
             return UsageForecast(
                 values: values,
@@ -399,9 +399,9 @@ enum UsageAnalytics {
         let hours = currentCredits / netDaily * 24
         let exhaustAt = now.addingTimeInterval(hours * 3600)
         let warning = current <= lowThreshold || hours <= 2
-        var help = "按已观察 \(insight.observedDays) 天的净消耗约 \(creditText(netDaily)) Credits/天 估算"
+        var help = "按已观察 \(insight.observedDays) 天的净消耗约 \(creditText(netDaily)) 额度/天 估算"
         if reclaimed > 0.5 {
-            help += "（已扣除领取/重置增加约 \(creditText(reclaimed)) Credits）"
+            help += "（已扣除领取/重置增加约 \(creditText(reclaimed)) 额度）"
         } else {
             help += "（未记录到领取/重置增加）"
         }

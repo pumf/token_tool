@@ -577,10 +577,10 @@ struct AnalyticsSuite {
                 switch descriptor.id {
                 case .qoder:
                     expectEqual(hour, 10)
-                    expectEqual(grant, "100 Credits")
+                    expectEqual(grant, "100 额度")
                 case .workbuddy:
                     expectEqual(hour, 0)
-                    expectEqual(grant, "100 积分")
+                    expectEqual(grant, "100 额度")
                 case .codex:
                     check(false, "Codex 不该有每日领取提醒")
                 }
