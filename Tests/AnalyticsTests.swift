@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // Analytics 纯函数、供应商注册表、本地数据格式与 CSV 导出的回归测试。
@@ -783,6 +784,26 @@ struct AnalyticsSuite {
         }
         test("条形样式不参与滚动，仍是剩余比例") {
             expectEqual(MenuBarText.compose([credits, noToday], style: .bars, showsToday: true), "94% 58%")
+        }
+        test("kern 补零头后两拍实测宽度逐像素一致") {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: NSFont.Weight.semibold)
+            func width(_ text: NSAttributedString) -> CGFloat { text.size().width }
+            let wide = MenuBarMetric(
+                letter: "W",
+                value: "12,345",
+                compact: "12.3k",
+                percent: "50%",
+                today: "3",
+                todayCompact: "3",
+                fraction: 0.5,
+                tint: Theme.qoder
+            )
+            for style in [MenuBarStyle.classic, .compact] {
+                let remaining = MenuBarText.compose([credits, wide, noToday], style: style, showsToday: false, font: font)
+                let today = MenuBarText.compose([credits, wide, noToday], style: style, showsToday: true, font: font)
+                let gap = abs(width(today) - width(remaining))
+                check(gap < 0.05, "\(style) 两拍实测宽度相差 \(gap)pt，补零头没有补齐")
+            }
         }
         test("全部平台算不出今日消耗时滚动不改变文案") {
             let metrics = [credits, noToday].map {

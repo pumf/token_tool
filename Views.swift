@@ -2075,7 +2075,8 @@ enum MenuBarText {
 
     /// 每个平台占位到「剩余」与「今日」两拍里较宽的一拍，多出来的空格按左右半分（字母钉在组左端，
     /// 数值在组内居中）：`Q 2,649` 换成 `Q ↓139  ` 时后面的平台不左右跳，整行宽度也不呼吸
-    /// （菜单栏项靠右对齐，行宽一变整串文字就平移）。
+    /// （菜单栏项靠右对齐，行宽一变整串文字就平移）。字符版按整数个空格取整，两拍仍可能差
+    /// 半个空格；应用侧用 `compose(_:style:showsToday:font:)` 做逐像素等宽。
     static func compose(
         _ metrics: [MenuBarMetric],
         style: MenuBarStyle,
@@ -2107,6 +2108,61 @@ enum MenuBarText {
             let padded = part.lead + String(repeating: " ", count: head) + part.value + tail
             line += padded
             cursor += widthOf(padded)
+        }
+        return line
+    }
+
+    /// 应用侧的逐像素等宽版：每个平台精确占 `slots[index]` 的实测宽度，空格只能整颗补，
+    /// 不足一颗的零头用 kern 加在最后一颗空格上（不足一颗时给负 kern 收缩），两拍总宽逐像素一致。
+    static func compose(
+        _ metrics: [MenuBarMetric],
+        style: MenuBarStyle,
+        showsToday: Bool,
+        font: NSFont
+    ) -> NSAttributedString {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        func measure(_ text: String) -> CGFloat {
+            NSAttributedString(string: text, attributes: attributes).size().width
+        }
+        guard !metrics.isEmpty else { return NSAttributedString(string: "AI", attributes: attributes) }
+        let baseline = metrics.map { segment(for: $0, style: style, showsToday: false) }
+        let rolled = metrics.map { segment(for: $0, style: style, showsToday: true) }
+        let current = showsToday ? rolled : baseline
+        let slots = zip(baseline, rolled).map { max(measure($0.lead + $0.value), measure($1.lead + $1.value)) }
+        let separator = style == .classic ? "   " : " "
+        let space = max(measure(" "), 0.0001)
+        let line = NSMutableAttributedString()
+        for (index, part) in current.enumerated() {
+            if index > 0 {
+                line.append(NSAttributedString(string: separator, attributes: attributes))
+            }
+            line.append(NSAttributedString(string: part.lead, attributes: attributes))
+            let pad = slots[index] - measure(part.lead + part.value)
+            if pad >= space {
+                let count = Int((pad / space).rounded(.down))
+                let head = count / 2
+                let tail = count - head
+                if head > 0 {
+                    line.append(NSAttributedString(string: String(repeating: " ", count: head), attributes: attributes))
+                }
+                line.append(NSAttributedString(string: part.value, attributes: attributes))
+                if tail > 1 {
+                    line.append(NSAttributedString(string: String(repeating: " ", count: tail - 1), attributes: attributes))
+                }
+                // 零头补在最后一颗空格上：kern 加在字形之后，整组的实测宽度正好等于槽宽。
+                let remainder = pad - CGFloat(count) * space
+                if remainder > 0.05 {
+                    line.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: NSNumber(value: Double(remainder))]))
+                } else {
+                    line.append(NSAttributedString(string: " ", attributes: attributes))
+                }
+            } else {
+                line.append(NSAttributedString(string: part.value, attributes: attributes))
+                // 零头不足一颗空格：一颗空格加负 kern，步进正好等于零头。
+                if pad > 0.05 {
+                    line.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: NSNumber(value: Double(pad - space))]))
+                }
+            }
         }
         return line
     }
@@ -2248,8 +2304,8 @@ extension UsageStore {
         menuBarShowsToday = showsToday && menuBarRollAvailable
     }
 
-    func menuBarText(for style: MenuBarStyle, widthOf: (String) -> CGFloat = MenuBarText.estimatedWidth) -> String {
-        MenuBarText.compose(menuBarMetrics, style: style, showsToday: menuBarShowsToday, widthOf: widthOf)
+    func menuBarText(for style: MenuBarStyle, font: NSFont) -> NSAttributedString {
+        MenuBarText.compose(menuBarMetrics, style: style, showsToday: menuBarShowsToday, font: font)
     }
 
     private func percentOf(_ remaining: Double?, over total: Double) -> Double? {

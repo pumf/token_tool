@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.6.4**（build 21） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.6.5**（build 22） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 界面预览
 
@@ -139,7 +139,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.6.4` | 当前安装版本 |
+| `v1.6.5` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -176,11 +176,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.4-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.6.4-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.6.4.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.4/TokenTool-1.6.4.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.5-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.6.5-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.6.5.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.4/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.5/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -322,6 +322,12 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.6.5
+
+- **菜单栏切拍宽度固定到像素**：1.6.2 起两拍按空格补位，但空格只能整颗补，每个平台四舍五入后最多差半颗空格，三家叠加后切拍瞬间整行仍会呼吸几个像素。应用侧占位改用 `NSAttributedString`：每个平台精确占两拍中较宽一拍的实测宽度，不足一颗空格的零头用 kern 加在最后一颗空格上（不足一颗时给负 kern 收缩），两拍总宽逐像素一致。本机真实数据实测：数字与紧凑两种样式两拍文字宽同为 158.50pt / 127.35pt，按钮宽 163.00pt / 132.00pt，Δ0.00pt。
+- 纯排版改动：滚动节奏、字母钉组左端、数值组内居中的观感不变；按字符数估算的 `compose` 保留给测试与无字体环境，条形样式照旧不参与滚动。
+- 新增真实菜单栏字体下两拍实测等宽的回归断言，154 项断言全绿。
 
 ### 1.6.4
 
@@ -484,7 +490,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.6.4（build 21） |
+| 当前版本 | 1.6.5（build 22） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

@@ -120,7 +120,7 @@ Qoder CLI 未安装时，「安装 CLI」会一键下载官方安装包并自动
 - 自动刷新：Codex / WorkBuddy 每 60 秒，Qoder 每 90 秒
 - 启动先展示缓存数据，后台异步更新
 - 开机启动一键开关（LaunchAgent）
-- MIT 开源，当前版本 1.6.4
+- MIT 开源，当前版本 1.6.5
 
 **下载**：到 [Releases 页面](https://github.com/pumf/token_tool/releases) 下载对应芯片的 DMG（内置 Intel / Apple Silicon / 通用三版），拖进「应用程序」即可。
 
