@@ -62,7 +62,7 @@ struct UsageForecast: Sendable {
 
 struct UsageInsight: Sendable {
     let todayConsumed: Double?
-    /// 昨天 00:00 到「昨天同一时刻」的消耗，用来判断今天用得多不多；昨天这段没采满时为 nil。
+    /// 昨天一整天（昨天 00:00 到今天 00:00）的消耗，用来判断今天用得多不多；昨天没采满时为 nil。
     let yesterdayConsumed: Double?
     let dailyAverage: Double?
     let netDailyAverage: Double?
@@ -197,7 +197,6 @@ enum UsageAnalytics {
         let todayStart = calendar.startOfDay(for: now).timeIntervalSince1970
         let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
         let yesterdayStart = calendar.startOfDay(for: yesterday).timeIntervalSince1970
-        let yesterdaySameTime = yesterday.timeIntervalSince1970
 
         var points: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
         switch provider.quotaKind {
@@ -227,7 +226,7 @@ enum UsageAnalytics {
         var todayConsumed: Double = 0
         var hasTodayPair = false
         var yesterdayConsumed: Double = 0
-        var hasYesterdayPair = false
+        var yesterdayCovered: TimeInterval = 0
         for index in 1..<points.count {
             let previous = points[index - 1]
             let current = points[index]
@@ -247,16 +246,17 @@ enum UsageAnalytics {
             let consumed = previous.value - current.value
             let endsToday = current.at >= todayStart
             if endsToday { hasTodayPair = true }
+            // 与昨天整天有交集的这一对：交集时长既算「采到的昨天」，也按占比折算昨日消耗；
+            // 跨零点那一对剩下的那半归今日，交集为 0 的对不算昨天。
+            let yesterdayOverlap = min(current.at, todayStart) - max(previous.at, yesterdayStart)
+            if yesterdayOverlap > 0 {
+                yesterdayCovered += yesterdayOverlap
+                if consumed > 0 {
+                    yesterdayConsumed += consumed * (yesterdayOverlap / span)
+                }
+            }
             if consumed > 0 {
                 totalConsumed += consumed
-                if current.at > yesterdayStart, current.at <= yesterdaySameTime {
-                    hasYesterdayPair = true
-                    // 跨窗口边界的样本对按落在昨天时段内的比例计入，和今日口径一致。
-                    let overlap = min(current.at, yesterdaySameTime) - max(previous.at, yesterdayStart)
-                    if overlap > 0 {
-                        yesterdayConsumed += consumed * min(1, overlap / span)
-                    }
-                }
                 guard endsToday else { continue }
                 if previous.at < todayStart {
                     todayConsumed += consumed * min(1, (current.at - todayStart) / span)
@@ -274,12 +274,9 @@ enum UsageAnalytics {
         let netDailyAverage = hasSpan
             ? (totalConsumed - totalReclaimed) / Double(observedDays)
             : nil
-        // 昨天那段没采满就别说「昨天用了 X」，否则新机或昨天合盖会给出一个偏小的参照值。
-        let yesterdayWindow = yesterdaySameTime - yesterdayStart
-        let yesterdayCovered = min(last.at, yesterdaySameTime) - max(first.at, yesterdayStart)
-        let hasYesterday = hasYesterdayPair
-            && yesterdayWindow > 0
-            && yesterdayCovered >= yesterdayWindow * 0.9
+        // 昨天没采满就别说「昨天用了 X」，否则昨天合盖或刚装机时那段消耗查不到，参照会偏小。
+        let yesterdayLength = todayStart - yesterdayStart
+        let hasYesterday = yesterdayLength > 0 && yesterdayCovered >= yesterdayLength * 0.9
 
         return UsageInsight(
             todayConsumed: hasTodayPair ? todayConsumed : nil,

@@ -1937,7 +1937,7 @@ struct ProviderCard<Detail: View>: View {
                     }
                     .foregroundStyle(.secondary)
                     .fixedSize()
-                    .help("今日消耗 \(secondaryValue)，按本机历史采样估算；领取或重置带来的增加不计入消耗")
+                    .help("今日为今天 0 点至今、昨天为昨天整天的消耗，按本机历史采样估算；领取或重置带来的增加不计入消耗")
                 }
                 Spacer(minLength: Token.spaceTight)
                 Text(valueCaption)
@@ -2693,7 +2693,9 @@ struct MenuContent: View {
     }
 
     /// 简单模式更关心「今天用了多少」，今日消耗并进剩余量那一行；口径与常规模式的洞察行一致。
-    /// 单看今日判断不了多不多，所以带上昨天同时段做参照；昨天没采满时只显示今日。
+    /// 单看今日判断不了多不多，所以带上昨天全天做参照；昨天没采满时只显示今日。
+    /// 参照是「昨天一整天」而不是「昨天同一时刻」：用量按工作时段成片出现，同时段对比会在
+    /// 早上给出「今日 85 · 昨天 4」这种看着像坏数的数字。
     private func cardTodayValue(_ provider: UsageProvider) -> String? {
         guard let insight = store.insight(for: provider), let today = insight.todayConsumed else { return nil }
         let current = consumptionText(today, percent: insight.isPercent)

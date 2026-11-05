@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.6.2**（build 19） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.6.3**（build 20） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
 
 ## 界面预览
 
@@ -40,10 +40,10 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 - **三种菜单栏样式**：`数字`（完整数值，默认）、`紧凑`（超千用 k 缩写省宽度）、`条形`（品牌色小竖条 + 剩余比例），设置区「样式」一行单选切换，立即生效并本地保存；告警高亮、待领取前缀与闪动在三种样式下都生效。数字与紧凑样式每 5 秒在剩余量与今日消耗之间滚动，今日那一拍带 `↓` 前缀，两拍按像素补位、切拍不跳位。
 - **独立显示开关**：面板底部可分别隐藏 / 显示 Qoder、WorkBuddy、Codex；全部隐藏时仍保留一个 `AI` 入口，点击照常展开面板，数据也继续在后台采集。
 - **自适应面板**：窗口高度跟着内容走——内容较短时弹窗同步收起，底部不再留一段空白；超过屏幕可用区域才整页滚动。三家卡片采用统一的五段布局（图标与名称 / 主数值 / 进度 / 洞察 / 脚注），高度对齐；正文最小字号 10pt，主数值 22pt 等宽数字。
-- **简单模式**：快捷栏「简单」开关（设置区「界面」一行同样可切换）让三张卡片只保留名称、套餐、主数值、一条主要进度条与今日消耗，隐藏洞察、预测、更新时间与次要比率；今日消耗紧挨在剩余量后面、字号更小并带 `↓` 标识（`2,649 ↘ 今日 137`），昨日同时段采满时再跟一段参照（`3,772 ↘ 今日 192 · 昨天 4`），一屏内同时看到「还剩多少」「今天用了多少」和「比昨天多不多」。告警、错误与关注摘要照常显示，开关状态本地保存。
+- **简单模式**：快捷栏「简单」开关（设置区「界面」一行同样可切换）让三张卡片只保留名称、套餐、主数值、一条主要进度条与今日消耗，隐藏洞察、预测、更新时间与次要比率；今日消耗紧挨在剩余量后面、字号更小并带 `↓` 标识（`2,649 ↘ 今日 137`），昨天整天采满时再跟一段参照（`3,715 ↘ 今日 102 · 昨天 247`），一屏内同时看到「还剩多少」「今天用了多少」和「比昨天多不多」。告警、错误与关注摘要照常显示，开关状态本地保存。
 - **设置折叠**：菜单栏显示、提醒、智能预警与低额度阈值收进右上角齿轮，折叠时仅保留一行快捷栏（最近刷新时间、预警阈值开关、简单模式开关、展开入口）。
 - **详情面板**：套餐名称、Credits 进度条、剩余 / 总量、限额窗口、重置时间、最后更新时间与错误状态。
-- **用量洞察**：按本机历史采样估算今日消耗、昨日同时段消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗，昨日那段没采满（合盖、刚装机）时不给参照值。
+- **用量洞察**：按本机历史采样估算今日消耗、昨天全天消耗与近 7 日日均；领取额度或窗口重置带来的增加不计入消耗，昨天整天没采满九成（合盖、刚装机）时不给参照值。
 - **快捷入口**：每张卡片提供「打开」客户端与「官网」链接；Qoder CLI 未安装时「安装 CLI」一键下载官方安装包并在装好后自动发起登录，未登录时「登录」直接在浏览器完成授权，无需打开终端。
 - **领取提醒**：Qoder 每天 10:00、WorkBuddy 每天 00:00 提醒领取 100 额度；Codex 按最长限额窗口的重置时间提醒。三路可独立开关。
 - **三层可见提醒**：额度告急与「今日待领取」不只发系统通知——菜单栏文字会变色加图标（告警红色 `⚠`、待领取橙色 `＋`），新提醒出现后闪动 60 秒（打开面板即停），面板顶部还有一条关注摘要列出原因、预计耗尽时刻与「打开客户端」。系统通知被关闭、勿扰模式或通知已划走都不再漏看。
@@ -139,7 +139,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.6.2` | 当前安装版本 |
+| `v1.6.3` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 将近 14 天用量历史导出为 CSV 文件 |
@@ -176,11 +176,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.2-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.6.2-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.6.2.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.2/TokenTool-1.6.2.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.3-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.6.3-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.6.3.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.3/TokenTool-1.6.3.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.2/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.3/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -322,6 +322,12 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.6.3
+
+- **昨日参照改成昨天全天**：1.6.2 的「昨天 X」取的是昨天 00:00 到昨天同一时刻，而用量按工作时段成片出现，于是早上会给出 `今日 102 · 昨天 4` 这种看着像坏数的数字（本机真实数据：昨天全天 247，但昨天午后才开工，到同一时刻只用了 4）。现在 `yesterdayConsumed` 取昨天 00:00 到今天 00:00 的整天消耗，卡片显示 `3,715 ↘ 今日 102 · 昨天 247`，和记忆里的昨天对得上；今日仍是 0 点至今，两个口径都写在鼠标提示里。
+- **昨天是否采满改为累计可用样本对时长**：旧守卫只看首尾样本的时间跨度，中间合盖八小时也算「采满」。现在累计没被跳过（套餐总量与窗口重置没变）的样本对落在昨天内的时长，不足昨天全天的九成就不给参照——刚装机、昨天下午才开机会隐藏这段，而不是给一个偏小的数。跨零点的那一对按落在昨天内的比例计入昨天，不再出现两边都不算的空档。
+- 重写 `runInsight()` 的三条昨日断言（昨天全天 1200、领取回补不计且跨零点对归昨天 700、昨天没采满不给参照），152 项断言全绿；简单模式面板按本机真实数据重新出图确认三家分别是 `今日 0 · 昨天 0`、`今日 102 · 昨天 247`、`今日 1.0% · 昨天 24%`。
 
 ### 1.6.2
 
@@ -472,7 +478,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.6.2（build 19） |
+| 当前版本 | 1.6.3（build 20） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

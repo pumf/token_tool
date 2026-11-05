@@ -206,8 +206,8 @@ struct AnalyticsSuite {
             expectEqual(insight?.observedDays, 1)
             expectEqual(insight?.isPercent, false)
         }
-        test("昨日同时段只算昨天 00:00 到此刻那段") {
-            // 昨天每小时掉 50（00:00→12:00 共 600），今天每小时掉 10（00:00→12:00 共 120）。
+        test("昨日全天只算昨天 00:00 到今天 00:00 那段") {
+            // 昨天每小时掉 50（24 小时共 1200），今天每小时掉 10（00:00→12:00 共 120）。
             let samples = (0...36).map { hour -> UsageSample in
                 let consumed = Double(hour) <= 24
                     ? Double(hour) * 50
@@ -217,25 +217,26 @@ struct AnalyticsSuite {
             let insight = UsageAnalytics.insight(
                 provider: .qoder, input: creditInput(remaining: 1280), samples: samples, now: noon
             )
-            expectClose(insight?.yesterdayConsumed, 600)
+            expectClose(insight?.yesterdayConsumed, 1200)
             expectClose(insight?.todayConsumed, 120)
         }
-        test("昨日同时段里领取回补不计入，跨零点的样本对不算昨天") {
+        test("昨日全天里领取回补不计入，跨零点的样本对不再丢") {
             let samples = [
                 creditSample(at: offset(-36), remaining: 1000),
                 creditSample(at: offset(-30), remaining: 400),
-                creditSample(at: offset(-24), remaining: 900),   // 07 领取回补 500
-                creditSample(at: offset(-12), remaining: 800),   // 正好跨到今天 00:00
+                creditSample(at: offset(-24), remaining: 900),   // 昨天中午领取回补 500
+                creditSample(at: offset(-12), remaining: 800),   // 正好落在今天 00:00
                 creditSample(at: offset(0), remaining: 700),
             ]
             let insight = UsageAnalytics.insight(
                 provider: .qoder, input: creditInput(remaining: 700), samples: samples, now: noon
             )
-            expectClose(insight?.yesterdayConsumed, 600)
+            // 昨天 00:00→24:00 一共掉 700，回补的 500 不算消耗，跨零点对归昨天不归今日。
+            expectClose(insight?.yesterdayConsumed, 700)
             expectClose(insight?.todayConsumed, 100)
         }
         test("昨天没采满时不给昨日参照") {
-            // 昨天合盖到下午才开机，昨天那段一个样本都没有，硬给「昨天用了 X」会低估。
+            // 昨天下午才开机，昨天 00:00 到 15:00 那段没有样本，硬给「昨天用了 X」会低估。
             let samples = (0...20).map { hour -> UsageSample in
                 creditSample(at: offset(-21 + Double(hour)), remaining: 2000 - Double(hour) * 30)
             }
