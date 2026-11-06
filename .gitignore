@@ -3,3 +3,6 @@ dist/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Qoder Sites 插件生成的站点绑定描述文件（含冻结的 index 快照，随每次 prepare 重建）
+*.qoder.site
