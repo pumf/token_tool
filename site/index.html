@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TokenTool · 你的 AI 额度还剩多少，一瞥尽知</title>
+<meta name="description" content="TokenTool 是 macOS 菜单栏上的 AI 用量仪表盘：Qoder、WorkBuddy、Codex 三家额度常驻菜单栏，今日消耗、昨日对比、净日均耗尽预测、三层告警与领取提醒，全部在本机计算。MIT 开源。">
+<meta property="og:title" content="TokenTool · 你的 AI 额度还剩多少，一瞥尽知">
+<meta property="og:description" content="macOS 菜单栏上的 AI 用量仪表盘：三家额度、耗尽预测、三层告警，本机计算、不读凭据。">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230b1020'/><text x='16' y='22' font-size='15' text-anchor='middle' fill='%23337dfa' font-family='monospace'>AI</text></svg>">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+<canvas class="constellation" id="constellation" aria-hidden="true"></canvas>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<header class="nav">
+  <a class="brand" href="#top">
+    <span class="brand-mark" aria-hidden="true">AI</span>
+    <span class="brand-text">TokenTool<em>v1.6.5</em></span>
+  </a>
+  <nav class="nav-links" aria-label="页面导航">
+    <a href="#pain">为什么</a>
+    <a href="#providers">三家额度</a>
+    <a href="#features">功能</a>
+    <a href="#forecast">预测口径</a>
+    <a href="#alerts">提醒</a>
+    <a href="#shots">界面</a>
+    <a href="#download">下载</a>
+  </nav>
+  <div class="nav-actions">
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换深浅色">
+      <span class="dot dot-dark" aria-hidden="true"></span>
+      <span class="dot dot-light" aria-hidden="true"></span>
+    </button>
+    <a class="btn btn-ghost" href="https://github.com/pumf/token_tool" target="_blank" rel="noopener">GitHub</a>
+    <a class="btn btn-solid" href="#download">下载</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <section class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow reveal">macOS 菜单栏 · AI 用量仪表盘 · MIT 开源</p>
+      <h1 class="reveal d1">你的 AI 额度<br><span class="grad">还剩多少</span>，<br>不用再点开三个客户端。</h1>
+      <p class="lede reveal d2">
+        Qoder、WorkBuddy、Codex 的余额、今日消耗、耗尽时刻，压缩成菜单栏上的一瞥。
+        每 5 分钟一次本机采样，按<strong>净日均消耗</strong>估算还能撑几天；
+        额度告急时菜单栏变色、面板摘要、系统通知三重提醒。数据全部留在本机，不读取任何登录凭据。
+      </p>
+      <div class="hero-cta reveal d3">
+        <a class="btn btn-solid btn-lg" href="#download" id="heroDownload">下载 Apple Silicon 版</a>
+        <a class="btn btn-line btn-lg" href="https://github.com/pumf/token_tool/releases" target="_blank" rel="noopener">查看更新日志</a>
+      </div>
+      <ul class="hero-stats reveal d4">
+        <li><b data-count="3">0</b><span>家供应商<br>一个菜单栏</span></li>
+        <li><b data-count="5">0</b><span>分钟一次采样<br>本机历史</span></li>
+        <li><b data-count="14">0</b><span>天用量留存<br>7 天趋势曲线</span></li>
+        <li><b data-count="154">0</b><span>项回归断言<br>口径不回归</span></li>
+      </ul>
+    </div>
+
+    <div class="hero-stage reveal d2">
+      <!-- 菜单栏仿真：与真实实现同构——两拍占位等宽，切拍整行不跳 -->
+      <div class="menubar-demo" id="menuBarDemo">
+        <div class="mb-left"><i></i><i></i><i></i></div>
+        <div class="mb-right">
+          <span class="mb-static">⌘ 100%  11:13</span>
+          <span class="mb-roll" id="mbRoll"><span class="mb-item">Q&nbsp;2,665</span><span class="mb-sep">···</span><span class="mb-item">W&nbsp;1,270</span><span class="mb-sep">···</span><span class="mb-item">C&nbsp;&nbsp;46%</span></span>
+          <span class="mb-glow" aria-hidden="true"></span>
+        </div>
+      </div>
+      <p class="stage-caption">↑ 每 5 秒在「剩余」与「今日」之间滚动，两拍逐像素等宽，切拍时整行不呼吸</p>
+
+      <div class="popover-demo">
+        <div class="pop-head">
+          <div>
+            <h3>AI 用量</h3>
+            <p>Qoder · WorkBuddy · Codex</p>
+          </div>
+          <span class="pop-pill">刷新 11:13</span>
+        </div>
+        <div class="pop-card" data-brand="qoder">
+          <div class="pc-top"><span class="pc-icon">{}</span><b>Qoder</b><em>Pro 套餐</em></div>
+          <div class="pc-value"><span class="num" id="popQoder">2,665</span><span class="pc-today">↘ 今日 22 · 昨天 94</span></div>
+          <div class="bar"><i style="--fill:70%"></i></div>
+          <div class="pc-foot"><span>剩余 / 共 3,800 额度</span><span class="spark" aria-hidden="true"></span></div>
+        </div>
+        <div class="pop-card" data-brand="workbuddy">
+          <div class="pc-top"><span class="pc-icon">▤</span><b>WorkBuddy</b><em>资源包</em></div>
+          <div class="pc-value"><span class="num">1,270</span><span class="pc-today">↘ 今日 24 · 昨天 84</span></div>
+          <div class="bar"><i style="--fill:55%"></i></div>
+          <div class="pc-foot"><span>剩余 / 共 2,300 额度</span><span class="spark" aria-hidden="true"></span></div>
+        </div>
+        <div class="pop-card" data-brand="codex">
+          <div class="pc-top"><span class="pc-icon">▸_</span><b>Codex</b><em>ChatGPT 订阅</em></div>
+          <div class="pc-value"><span class="num">46%</span><span class="pc-today">5 小时窗口剩余</span></div>
+          <div class="bar"><i style="--fill:46%"></i></div>
+          <div class="pc-foot"><span>周窗口预计 3.4 天后耗尽</span><span class="warn-tag">需要留意</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 痛点 ================= -->
+  <section class="section" id="pain">
+    <div class="section-head reveal">
+      <p class="kicker">为什么要做这个</p>
+      <h2>三个平台、三种口径、三遍重复</h2>
+      <p class="section-lede">想知道「今天还能放心写多久」，你原本得打开 A 的面板、点开 B 的官网、终端里再敲一遍 C 的命令。</p>
+    </div>
+    <div class="pain-grid">
+      <article class="pain-card reveal">
+        <h3>口径都不一样</h3>
+        <p>一家按额度点数计、一家按资源包计、一家按 5 小时 / 周 / 月限额窗口计。把它们统一成「剩余额度 + 今日消耗 + 预计耗尽」三行，才谈得上比较。</p>
+      </article>
+      <article class="pain-card reveal d1">
+        <h3>通知会漏，面板会关</h3>
+        <p>系统通知被划走、被勿扰模式吞掉，等你发现时额度已经见底。TokenTool 把同一件事在菜单栏变色、面板顶部摘要、系统通知三处各说一遍。</p>
+      </article>
+      <article class="pain-card reveal d2">
+        <h3>「今天用了多少」没人告诉你</h3>
+        <p>官方页面只给剩余。TokenTool 用本机采样算今日消耗、昨天全天对比、近 7 日日均，并且把每天领取的额度剔除，不让「回补」假装成「省下来」。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================= 三家 ================= -->
+  <section class="section" id="providers">
+    <div class="section-head reveal">
+      <p class="kicker">支持范围</p>
+      <h2>三家额度，一张注册表</h2>
+      <p class="section-lede">名称、口径、采集节奏、客户端与提醒全部收敛在同一份供应商描述符里，加一家不用再改四五处。</p>
+    </div>
+    <div class="provider-grid">
+      <article class="provider-card reveal" data-brand="qoder">
+        <header><span class="pc-icon big">{}</span><h3>Qoder</h3><em>官方 CLI · 账号额度</em></header>
+        <ul>
+          <li>套餐额度 + 附加额度分开显示</li>
+          <li>每天 10:00 提醒领取 100 额度</li>
+          <li>CLI 未装时一键下载并自动发起登录</li>
+          <li>打开面板时立刻刷新</li>
+        </ul>
+        <p class="provider-note">采集走官方 CLI 与本机通道，凭据只留在原处。</p>
+      </article>
+      <article class="provider-card reveal d1" data-brand="workbuddy">
+        <header><span class="pc-icon big">▤</span><h3>WorkBuddy</h3><em>本机客户端 · 资源包</em></header>
+        <ul>
+          <li>资源包数量与剩余额度同屏</li>
+          <li>每天 00:00 提醒领取 100 额度</li>
+          <li>本机 IPC 读取，25 秒超时预算</li>
+          <li>过期资源包不再计入总量</li>
+        </ul>
+        <p class="provider-note">领取与过期都能被历史采样识别。</p>
+      </article>
+      <article class="provider-card reveal d2" data-brand="codex">
+        <header><span class="pc-icon big">▸_</span><h3>Codex</h3><em>ChatGPT 登录 · 限额窗口</em></header>
+        <ul>
+          <li>5 小时 / 周 / 月窗口并列显示</li>
+          <li>重置前 20 分钟提醒即将重置</li>
+          <li>窗口口径优先，避免小时速率误导</li>
+          <li>app-server 只读取用量结构</li>
+        </ul>
+        <p class="provider-note">天级以上窗口只用近 7 天净日均外推。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================= 功能 ================= -->
+  <section class="section" id="features">
+    <div class="section-head reveal">
+      <p class="kicker">功能详解</p>
+      <h2>菜单栏那一瞥，背后有十二件事</h2>
+    </div>
+    <div class="feature-grid">
+      <article class="feature reveal"><b>01</b><h3>三种菜单栏样式</h3><p>数字（完整数值）、紧凑（超千用 k）、条形（品牌色竖条 + 剩余比例），单选切换立即生效并本地保存。</p></article>
+      <article class="feature reveal d1"><b>02</b><h3>滚动且不跳位</h3><p>每 5 秒在剩余量与今日消耗之间滚动，今日那拍带 <code>↓</code>；两拍按实测像素补位，切拍时整行宽度不变。</p>
+        <div class="mini-roll" aria-hidden="true"><span>Q&nbsp;2,665</span><span>Q&nbsp;&nbsp;↓22</span></div></article>
+      <article class="feature reveal d2"><b>03</b><h3>简单模式</h3><p>卡片只留名称、套餐、主数值、一条进度条与今日消耗：<code>2,665 ↘ 今日 22 · 昨天 94</code>，一屏看完三件事。</p></article>
+      <article class="feature reveal d3"><b>04</b><h3>用量洞察</h3><p>今日消耗、昨天全天、近 7 日日均；领取与重置带来的增加不计入消耗，昨天没采满九成时不给参照。</p></article>
+      <article class="feature reveal"><b>05</b><h3>耗尽预测</h3><p>按净日均消耗估算降到 0 的时刻；领取覆盖消耗时直接说「按当前节奏不会耗尽」，样本不足先积累。</p></article>
+      <article class="feature reveal d1"><b>06</b><h3>三层提醒</h3><p>菜单栏变色加图标（<span class="c-danger">⚠ 红</span> / <span class="c-claim">＋ 橙</span>）、新提醒闪动 60 秒、面板顶部关注摘要，通知被划走也不漏。</p></article>
+      <article class="feature reveal d2"><b>07</b><h3>趋势曲线</h3><p>近 7 天剩余曲线，画剩余而不是已用，套餐总量变化不会造成假跳变；零基线与「今日」虚线对齐。</p></article>
+      <article class="feature reveal d3"><b>08</b><h3>采集互不拖累</h3><p>三家各给超时预算（Codex 70s / WorkBuddy 25s / Qoder 80s），一家卡住不影响另外两家，失败按指数退避重试。</p></article>
+      <article class="feature reveal"><b>09</b><h3>本地兜底</h3><p>历史文件损坏自动回退上一份备份并留证；采集输出按平台隔离解码，一家字段变化不会把三家一起打回不可解析。</p></article>
+      <article class="feature reveal d1"><b>10</b><h3>版本检查与校验</h3><p>每 24 小时检查 GitHub Releases，按芯片匹配 DMG，下载后按 <code>SHA256SUMS</code> 比对再打开；取不到校验值会明确标注。</p></article>
+      <article class="feature reveal d2"><b>11</b><h3>CSV 导出</h3><p>一键导出近 14 天用量历史，便于离线分析与自建看板。</p></article>
+      <article class="feature reveal d3"><b>12</b><h3>无 Dock、无后台窗口</h3><p><code>LSUIElement</code> 常驻菜单栏，点开面板即展开，用完即收；三家显示可分别隐藏，全隐藏仍留一个 <code>AI</code> 入口。</p></article>
+    </div>
+  </section>
+
+  <!-- ================= 预测口径 ================= -->
+  <section class="section" id="forecast">
+    <div class="section-head reveal">
+      <p class="kicker">最有意思的部分</p>
+      <h2>预测不是拍脑袋</h2>
+      <p class="section-lede">每天领取的 100 额度会被剔除，否则「回补」会被当成省下来的用量，耗尽时间被算到下个世纪。</p>
+    </div>
+    <div class="forecast-wrap">
+      <div class="forecast-viz reveal">
+        <div class="fv-row">
+          <span class="fv-label">毛消耗</span>
+          <div class="fv-track"><i class="fv-fill fv-gross" style="--w:100%"><span>日均 183 额度</span></i></div>
+        </div>
+        <div class="fv-row">
+          <span class="fv-label">领取回补</span>
+          <div class="fv-track"><i class="fv-fill fv-grant" style="--w:55%"><span>日均 +100 额度</span></i></div>
+        </div>
+        <div class="fv-row">
+          <span class="fv-label">净日均</span>
+          <div class="fv-track"><i class="fv-fill fv-net" style="--w:45%"><span>83 额度 / 天</span></i></div>
+        </div>
+        <div class="fv-note">剩余 2,665 额度 ÷ 净日均 83 ≈ <b>32 天</b>后降到 0 —— 面板里那行「预计 30 天后耗尽」是这么来的。</div>
+      </div>
+      <div class="forecast-rules">
+        <article class="rule reveal"><h3>样本对逐段折算</h3><p>按相邻两次采样的剩余差值累计消耗；套餐总量变化或重置窗口不同的样本对直接跳过，跨零点那一对按落在昨天内的比例计入昨天。</p></article>
+        <article class="rule reveal d1"><h3>昨天全天，不是昨天同一时刻</h3><p>「昨天 X」取昨天 00:00 → 今天 00:00 的整天消耗。用量按工作时段成片出现，同时段参照会在早上给出 <code>今日 102 · 昨天 4</code> 这种看着像坏数的数字。</p></article>
+        <article class="rule reveal d2"><h3>窗口长度决定口径</h3><p>Codex 的周、月度这类天级以上窗口只用近 7 天净日均；5 小时这类短窗口才叠加近 1 小时速率，再和重置时刻比较，给出「可撑到重置」或预计耗尽时刻。</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 提醒 ================= -->
+  <section class="section" id="alerts">
+    <div class="section-head reveal">
+      <p class="kicker">三层可见性</p>
+      <h2>告急的时候，你会在三个地方看到它</h2>
+    </div>
+    <div class="alert-stage reveal">
+      <div class="alert-bar" id="alertBar">
+        <span class="ab-state" data-state="normal">Q 2,665 · W 1,270 · C 46%</span>
+        <span class="ab-state" data-state="warn"><i class="c-danger">⚠</i> Q 512 · W 1,270 · C 46%</span>
+        <span class="ab-state" data-state="claim"><i class="c-claim">＋</i> Q 2,665 · W 1,270 · C 46%</span>
+      </div>
+      <div class="alert-cards">
+        <article class="alert-card reveal"><b>菜单栏</b><p>低于阈值转红并加 <code>⚠</code>，待领取转橙加 <code>＋</code>，新提醒出现后闪动 60 秒，打开面板即停。</p></article>
+        <article class="alert-card reveal d1"><b>面板摘要</b><p>顶部一条关注摘要列出原因、预计耗尽时刻与「打开客户端」直达入口，通知被划走也看得到。</p></article>
+        <article class="alert-card reveal d2"><b>系统通知</b><p>低额度、预计重置前耗尽、消耗突然加速三类本地通知，点击直接打开对应客户端；支持「今天不再提醒」与「静音 30 分钟」。</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 界面截图 ================= -->
+  <section class="section" id="shots">
+    <div class="section-head reveal">
+      <p class="kicker">真实界面</p>
+      <h2>面板长这样</h2>
+      <p class="section-lede">以下截图由 1.6.5 版真实渲染管线在演示数据下生成，非设计稿。</p>
+    </div>
+    <div class="shot-tabs reveal" role="tablist" aria-label="界面截图切换">
+      <button role="tab" aria-selected="true" data-shot="detailed">详情模式</button>
+      <button role="tab" aria-selected="false" data-shot="simple">简单模式</button>
+      <button role="tab" aria-selected="false" data-shot="settings">设置展开</button>
+    </div>
+    <div class="shot-stage reveal">
+      <figure class="shot shot-light">
+        <img id="shotLight" src="assets/screens/panel-detailed-light.png" alt="TokenTool 详情面板（浅色）：三家额度卡片与关注摘要">
+        <figcaption>浅色</figcaption>
+      </figure>
+      <figure class="shot shot-dark">
+        <img id="shotDark" src="assets/screens/panel-detailed-dark.png" alt="TokenTool 详情面板（深色）：三家额度卡片与关注摘要">
+        <figcaption>深色</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ================= 数据与隐私 ================= -->
+  <section class="section" id="privacy">
+    <div class="section-head reveal">
+      <p class="kicker">边界</p>
+      <h2>只读用量，不碰凭据</h2>
+    </div>
+    <div class="privacy-grid">
+      <article class="privacy reveal"><h3>采集路径</h3><p>只走官方 CLI、本机 IPC 与 app-server；不做页面抓取，不逆向私有协议。</p></article>
+      <article class="privacy reveal d1"><h3>凭据</h3><p>不读取、不复制、不输出 token / refresh token / 密码 / 邮箱 / UIN，登录状态由官方客户端自己维护。</p></article>
+      <article class="privacy reveal d2"><h3>存储</h3><p>用量缓存在 <code>~/Library/Application Support/TokenTool</code>，历史保留 14 天，导出 CSV 由你主动触发。</p></article>
+      <article class="privacy reveal d3"><h3>网络</h3><p>只有版本检查会访问 GitHub Releases，用于读取最新标签与校验清单，不上传任何本地数据。</p></article>
+      <article class="privacy reveal d4"><h3>可审计</h3><p>MIT 开源，采集脚本与界面同仓；面板里的「诊断」直接打开已脱敏的本地日志。</p></article>
+      <article class="privacy reveal d5"><h3>校验</h3><p>每个安装包都有 SHA-256，应用内更新会比对 <code>SHA256SUMS</code> 后才打开 DMG。</p></article>
+    </div>
+  </section>
+
+  <!-- ================= 下载 ================= -->
+  <section class="section" id="download">
+    <div class="section-head reveal">
+      <p class="kicker">开始使用</p>
+      <h2>下载 v1.6.5</h2>
+      <p class="section-lede">ad-hoc 签名、未公证。首次打开被 Gatekeeper 拦截时：右键点 App →「打开」，或执行 <code>xattr -dr com.apple.quarantine /Applications/TokenTool.app</code>。</p>
+    </div>
+    <div class="dl-grid">
+      <a class="dl-card reveal" id="dlArm" href="https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.dmg" target="_blank" rel="noopener">
+        <b>Apple Silicon</b><span>arm64 · DMG</span><em id="dlArmHint">推荐 · 已匹配你的芯片</em>
+      </a>
+      <a class="dl-card reveal d1" href="https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.zip" target="_blank" rel="noopener">
+        <b>Apple Silicon</b><span>arm64 · ZIP</span><em>解压即用</em>
+      </a>
+      <a class="dl-card reveal d2" href="https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-x86_64.dmg" target="_blank" rel="noopener">
+        <b>Intel</b><span>x86_64 · DMG</span><em>Intel 机型</em>
+      </a>
+      <a class="dl-card reveal d3" href="https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5.dmg" target="_blank" rel="noopener">
+        <b>通用</b><span>universal · DMG</span><em>不确定芯片时选这个</em>
+      </a>
+    </div>
+    <p class="dl-extra reveal">
+      <a href="https://github.com/pumf/token_tool/releases/download/v1.6.5/SHA256SUMS" target="_blank" rel="noopener">SHA256SUMS 校验清单</a>
+      ·
+      <a href="https://github.com/pumf/token_tool/releases" target="_blank" rel="noopener">全部 Release</a>
+      ·
+      <a href="https://github.com/pumf/token_tool" target="_blank" rel="noopener">源码仓库</a>
+      ·
+      <a href="https://github.com/pumf/token_tool/issues" target="_blank" rel="noopener">问题反馈</a>
+    </p>
+  </section>
+
+  <!-- ================= 版本节奏 ================= -->
+  <section class="section" id="timeline">
+    <div class="section-head reveal">
+      <p class="kicker">迭代节奏</p>
+      <h2>每个版本都在修口径</h2>
+    </div>
+    <div class="timeline-wrap">
+      <ol class="timeline">
+        <li class="reveal"><b>1.6.5</b><p>菜单栏切拍宽度固定到像素：空格补位改用 kern 补零头，两拍逐像素等宽。</p></li>
+        <li class="reveal d1"><b>1.6.4</b><p>单位名统一为「额度」，Qoder 的 Credits 与 WorkBuddy 的积分不再一家一个说法。</p></li>
+        <li class="reveal d2"><b>1.6.3</b><p>昨日参照改为昨天全天，覆盖判定改为累计可用样本对时长。</p></li>
+        <li class="reveal d3"><b>1.6.2</b><p>菜单栏在剩余量与今日消耗之间滚动，并按像素补位不跳位。</p></li>
+        <li class="reveal d4"><b>1.6.1</b><p>供应商行为收进一张注册表，加一家不用再改四五处。</p></li>
+      </ol>
+      <aside class="timeline-note reveal d2">
+        <h3>五个版本改的都是同一件事</h3>
+        <p>不是加功能，而是把「同一个数字怎么算」钉死：领取的回补不计入消耗、昨日参照取昨天全天、窗口长度决定用哪种外推。</p>
+        <ul>
+          <li><b>净日均</b>剔除每日领取，耗尽日期不会被回补骗到</li>
+          <li><b>昨天全天</b>取代昨天同一时刻，早上不再看到怪数字</li>
+          <li><b>窗口分级</b>天级以上只用日均，短窗口才叠加小时速率</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ================= FAQ ================= -->
+  <section class="section" id="faq">
+    <div class="section-head reveal">
+      <p class="kicker">常见问题</p>
+      <h2>FAQ</h2>
+    </div>
+    <div class="faq">
+      <details class="reveal" open>
+        <summary>为什么我的面板显示「样本积累中」？</summary>
+        <p>耗尽预测需要至少 6 小时的本机历史样本，刚装机或长时间合盖时先积累。这段时间卡片只显示剩余与今日消耗，不会给一个没依据的耗尽时刻。</p>
+      </details>
+      <details class="reveal d1">
+        <summary>「昨天 X」有时不显示？</summary>
+        <p>昨天没采满九成（合盖、下午才开机、刚装机）时直接隐藏参照，而不是给一个偏小的数字误导对比。</p>
+      </details>
+      <details class="reveal d2">
+        <summary>「额度」和官方页面的 Credits 是一个东西吗？</summary>
+        <p>是同一个东西。官方页面里 Qoder 写作 Credits、WorkBuddy 写作积分，面板统一显示为「额度」，避免同一个数字出现两种叫法；数值本身不做任何换算。</p>
+      </details>
+      <details class="reveal d3">
+        <summary>会不会读到我的登录凭据？</summary>
+        <p>不会。采集只走官方 CLI、本机 IPC 与 app-server 的用量输出，代码里没有任何读取或输出 token、密码、邮箱、UIN 的路径；诊断日志同样脱敏。</p>
+      </details>
+      <details class="reveal d4">
+        <summary>需要 Xcode 或 Homebrew 吗？</summary>
+        <p>不需要。安装包是可直接运行的 App，拖进「应用程序」即可；只有你自己构建时才需要命令行工具（纯 <code>swiftc</code> 构建，无 Xcode 工程）。</p>
+      </details>
+      <details class="reveal d5">
+        <summary>怎么确认下载包没被改过？</summary>
+        <p>Release 下有 <code>SHA256SUMS</code>，应用内更新下载完成后会自动比对并只在通过时打开 DMG；手动下载可以用 <code>shasum -a 256 -c SHA256SUMS</code> 复验。</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="closing reveal">
+    <h2>装上它，然后忘掉它<br><span class="grad">直到你需要知道答案的那一秒。</span></h2>
+    <p class="closing-lede">没有 Dock 图标，没有后台窗口，没有账号体系。它只是在你扫一眼菜单栏的时候，把三个平台的答案一起给你。</p>
+    <div class="hero-cta">
+      <a class="btn btn-solid btn-lg" href="#download" id="ctaDownload">下载 v1.6.5</a>
+      <a class="btn btn-line btn-lg" href="https://github.com/pumf/token_tool" target="_blank" rel="noopener">Star on GitHub</a>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div>
+      <p class="footer-brand">TokenTool</p>
+      <p>macOS 菜单栏上的 AI 用量仪表盘 · Qoder / WorkBuddy / Codex</p>
+    </div>
+    <ul>
+      <li><a href="https://github.com/pumf/token_tool" target="_blank" rel="noopener">源码（MIT）</a></li>
+      <li><a href="https://github.com/pumf/token_tool/releases" target="_blank" rel="noopener">Releases</a></li>
+      <li><a href="https://github.com/pumf/token_tool/issues" target="_blank" rel="noopener">Issues</a></li>
+      <li><a href="#privacy">数据边界</a></li>
+    </ul>
+    <p class="footer-note">当前版本 1.6.5（build 22）· 截图为演示数据 · 本站不收集任何访问数据。</p>
+  </div>
+</footer>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>
