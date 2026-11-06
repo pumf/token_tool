@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情；三家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与升级入口。
 
-当前版本：**1.6.5**（build 22） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool)
+当前版本：**1.6.5**（build 22） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -318,6 +318,7 @@ defaults delete com.local.tokentool 2>/dev/null
 ├── Tests/               # 预测口径、供应商注册表与本地数据格式的回归测试
 ├── .github/workflows/   # CI：回归测试 + 三架构打包产物
 ├── docs/screenshots/    # README 界面截图（演示数据）
+├── site/                # 宣传站（纯静态，无构建；webDirectory 就是它）
 └── README.md
 ```
 
