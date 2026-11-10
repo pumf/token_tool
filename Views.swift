@@ -1179,6 +1179,11 @@ struct MenuContent: View {
                         .font(Token.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let org = result.orgResourcePackage, org != "N/A", !org.isEmpty {
+                    Text("组织资源包 \(org)")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                }
                 insightRow(provider)
                 forecastRow(provider, tint: descriptor.color)
             case .resourcePackage:
@@ -1292,6 +1297,15 @@ struct MenuContent: View {
             }
             .font(Token.caption)
             .foregroundStyle(.secondary)
+            if let resetCredits = result.resetCredits, resetCredits > 0 {
+                HStack(spacing: 8) {
+                    Text("重置积分")
+                    Spacer()
+                    Text("\(resetCredits) 个")
+                }
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
+            }
             insightRow(provider)
             forecastRow(provider, tint: descriptor.color)
         } else {
