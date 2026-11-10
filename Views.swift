@@ -1019,10 +1019,15 @@ struct MenuContent: View {
         switch updates.state {
         case .downloading:
             return "正在下载安装包…"
+        case .installing:
+            return "正在挂载并替换 /Applications 里的 TokenTool…"
         case .ready(_, _, let verified):
-            return verified
-                ? "SHA-256 已校验 · 拖入「应用程序」完成升级"
-                : "未找到校验值，SHA-256 未校验 · 拖入「应用程序」完成升级"
+            guard verified else {
+                return "未找到校验值，SHA-256 未校验 · 需确认后才会打开"
+            }
+            return updates.canAutoInstall
+                ? "SHA-256 已校验 · 点「安装并重启」自动替换 /Applications 里的版本"
+                : "SHA-256 已校验 · 当前跑的不是 /Applications 里的版本，点按只会打开安装包"
         default:
             return "当前 v\(updates.currentVersion)，可下载对应芯片安装包"
         }
@@ -1827,6 +1832,13 @@ struct MenuContent: View {
                 ProgressView()
                     .controlSize(.mini)
                 Text("下载中")
+            }
+            .foregroundStyle(.secondary)
+        case .installing:
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("安装中")
             }
             .foregroundStyle(.secondary)
         case .ready:

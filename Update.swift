@@ -3,8 +3,8 @@ import Combine
 import CryptoKit
 import Foundation
 
-struct UpdateRelease: Equatable {
-    struct Asset: Equatable {
+struct UpdateRelease: Equatable, Sendable {
+    struct Asset: Equatable, Sendable {
         let name: String
         let url: URL
     }
@@ -158,6 +158,115 @@ private enum UpdateError: Error {
     }
 }
 
+enum UpdateInstaller {
+    struct Failure: Error {
+        let message: String
+    }
+
+    /// 只有从 /Applications 里运行、且安装包过了 SHA-256 校验，才敢自动替换；
+    /// 从 build 目录里跑的开发实例、或没有校验值的包，都退回手动拖拽。
+    static func canInstall(bundleURL: URL, verified: Bool) -> Bool {
+        verified && bundleURL.path.hasPrefix("/Applications/")
+            && bundleURL.lastPathComponent == "TokenTool.app"
+    }
+
+    /// 挂载 DMG → 复制新版本到临时位置 → 原子替换 → 备份清理。
+    /// 任一步失败都在替换前中止，或替换失败后回滚，不留半装状态。
+    static func install(dmg: URL, replacing destination: URL, expectedVersion: String?) throws {
+        let manager = FileManager.default
+        let mount = manager.temporaryDirectory
+            .appendingPathComponent("TokenTool-mount-\(UUID().uuidString)")
+        try manager.createDirectory(at: mount, withIntermediateDirectories: false)
+        defer {
+            _ = try? run("/usr/bin/hdiutil", ["detach", "-quiet", mount.path], timeout: 30)
+            try? manager.removeItem(at: mount)
+        }
+        _ = try run(
+            "/usr/bin/hdiutil",
+            ["attach", "-nobrowse", "-readonly", "-noverify", "-mountpoint", mount.path, dmg.path],
+            timeout: 90
+        )
+        guard let source = mountedApp(in: mount) else {
+            throw Failure(message: "安装包里找不到 TokenTool.app")
+        }
+        if let expectedVersion, let mounted = bundleVersion(source), mounted != expectedVersion {
+            throw Failure(message: "安装包版本是 \(mounted)，与发布标记 \(expectedVersion) 不一致")
+        }
+
+        let staging = manager.temporaryDirectory
+            .appendingPathComponent("TokenTool-new-\(UUID().uuidString)/TokenTool.app")
+        try manager.createDirectory(at: staging.deletingLastPathComponent(), withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: staging.deletingLastPathComponent()) }
+        _ = try run("/usr/bin/ditto", [source.path, staging.path], timeout: 180)
+        guard bundleVersion(staging) != nil else {
+            throw Failure(message: "复制后的应用无法识别")
+        }
+
+        let backup = destination.appendingPathExtension("previous")
+        try? manager.removeItem(at: backup)
+        do {
+            try manager.moveItem(at: destination, to: backup)
+            try manager.moveItem(at: staging, to: destination)
+        } catch {
+            // 写回原版本；能撤就撤，撤不掉就把错误抛给调用方去手动安装。
+            try? manager.moveItem(at: backup, to: destination)
+            throw Failure(message: "写入 /Applications 失败，请手动拖拽安装")
+        }
+        try? manager.removeItem(at: backup)
+    }
+
+    static func mountedApp(in mount: URL) -> URL? {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: mount, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return nil }
+        return entries.first {
+            $0.lastPathComponent == "TokenTool.app" && bundleVersion($0) != nil
+        }
+    }
+
+    static func bundleVersion(_ url: URL) -> String? {
+        let path = url.appendingPathComponent("Contents/Info.plist").path
+        guard let plist = NSDictionary(contentsOfFile: path) else { return nil }
+        return plist["CFBundleShortVersionString"] as? String
+    }
+
+    private static func run(_ launchPath: String, _ arguments: [String], timeout: TimeInterval) throws -> String {
+        let tool = URL(fileURLWithPath: launchPath).lastPathComponent
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tokentool-install-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: outputURL) else {
+            throw Failure(message: "无法收集 \(tool) 的输出")
+        }
+        defer {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        process.standardOutput = handle
+        process.standardError = handle
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        do {
+            try process.run()
+        } catch {
+            throw Failure(message: "\(tool) 启动失败")
+        }
+        guard exited.wait(timeout: .now() + timeout) != .timedOut else {
+            process.terminate()
+            _ = exited.wait(timeout: .now() + 5)
+            throw Failure(message: "\(tool) 超时")
+        }
+        let text = (try? Data(contentsOf: outputURL)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        guard process.terminationStatus == 0 else {
+            throw Failure(message: "\(tool) 失败（\(process.terminationStatus)）")
+        }
+        return text
+    }
+}
+
 @MainActor
 final class UpdateChecker: ObservableObject {
     enum State: Equatable {
@@ -167,6 +276,7 @@ final class UpdateChecker: ObservableObject {
         case available(UpdateRelease)
         case downloading(UpdateRelease)
         case ready(UpdateRelease, URL, verified: Bool)
+        case installing(UpdateRelease)
         case failed(String)
     }
 
@@ -197,7 +307,8 @@ final class UpdateChecker: ObservableObject {
 
     var pendingRelease: UpdateRelease? {
         switch state {
-        case .available(let release), .downloading(let release), .ready(let release, _, _):
+        case .available(let release), .downloading(let release),
+             .ready(let release, _, _), .installing(let release):
             return release
         default:
             return nil
@@ -206,27 +317,39 @@ final class UpdateChecker: ObservableObject {
 
     var isWorking: Bool {
         switch state {
-        case .checking, .downloading:
+        case .checking, .downloading, .installing:
             return true
         default:
             return false
         }
     }
 
+    /// 只有已校验、且当前就跑在 /Applications 里，才敢承诺「安装并重启」。
+    var canAutoInstall: Bool {
+        guard case .ready(_, _, let verified) = state else { return false }
+        return UpdateInstaller.canInstall(bundleURL: Bundle.main.bundleURL, verified: verified)
+    }
+
     var primaryActionTitle: String {
         switch state {
         case .downloading:
             return "下载中"
+        case .installing:
+            return "安装中"
         case .ready:
-            return "打开安装包"
+            return canAutoInstall ? "安装并重启" : "打开安装包"
         default:
             return "下载更新"
         }
     }
 
     var canPerformPrimaryAction: Bool {
-        if case .downloading = state { return false }
-        return true
+        switch state {
+        case .downloading, .installing:
+            return false
+        default:
+            return true
+        }
     }
 
     func checkIfNeeded() {
@@ -288,11 +411,64 @@ final class UpdateChecker: ObservableObject {
         switch state {
         case .available(let release):
             download(release)
-        case .ready(_, let url, _):
-            NSWorkspace.shared.open(url)
+        case .ready(let release, let url, true):
+            install(release, from: url)
+        case .ready(_, let url, false):
+            confirmAndOpen(url)
         default:
             break
         }
+    }
+
+    /// 校验通过的包直接半自动升级：挂载、替换 /Applications 里的应用、启动新版本。
+    /// 不满足自动安装条件（开发实例、非 /Applications）时退回打开安装包。
+    private func install(_ release: UpdateRelease, from dmg: URL) {
+        let destination = Bundle.main.bundleURL
+        guard UpdateInstaller.canInstall(bundleURL: destination, verified: true) else {
+            NSWorkspace.shared.open(dmg)
+            return
+        }
+        state = .installing(release)
+        lastError = nil
+        let expectedVersion = release.version
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome: String? = await Task.detached(priority: .userInitiated) {
+                do {
+                    try UpdateInstaller.install(dmg: dmg, replacing: destination, expectedVersion: expectedVersion)
+                    return nil
+                } catch {
+                    return (error as? UpdateInstaller.Failure)?.message ?? "自动安装失败"
+                }
+            }.value
+            if let outcome {
+                Diagnostics.record("update", "自动安装失败：\(outcome)")
+                self.lastError = outcome
+                self.state = .ready(release, dmg, verified: true)
+                return
+            }
+            Diagnostics.record("update", "已自动安装 \(expectedVersion)，正在重启")
+            NSWorkspace.shared.open(destination)
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// 没有校验值就不默认打开：先讲清风险，用户确认后才挂载安装包。
+    private func confirmAndOpen(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "安装包缺少 SHA-256 校验值"
+        alert.informativeText = """
+            这次没能从 Release 页面拿到 \(url.lastPathComponent) 的校验值，无法确认它和发布版本一致。
+            可以先从 Release 页面自行核对，或确认网络环境后继续打开。
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "仍要打开")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            Diagnostics.record("update", "用户取消了未校验的安装包")
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private func download(_ release: UpdateRelease) {
@@ -331,7 +507,6 @@ final class UpdateChecker: ObservableObject {
                         : "已下载但没有校验值：\(url.lastPathComponent)"
                 )
                 self.state = .ready(release, destination, verified: verified)
-                NSWorkspace.shared.open(destination)
             } catch {
                 Diagnostics.record("update", "下载更新失败：\(Self.message(for: error))")
                 self.lastError = Self.message(for: error)

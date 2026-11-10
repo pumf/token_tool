@@ -161,6 +161,7 @@ struct AnalyticsSuite {
         runPersistence()
         runExport()
         runMenuBar()
+        runUpdate()
 
         print("\n\(checks) 项断言，\(failures) 项失败")
         exit(failures == 0 ? 0 : 1)
@@ -981,6 +982,100 @@ struct AnalyticsSuite {
             expectEqual(Format.percentDetailed(9.96), "10.0%")
             expectEqual(Format.percentDetailed(42), "42%")
             expectEqual(Format.percentDetailed(nil), "--")
+        }
+    }
+
+    // MARK: 升级：安装包挑选、校验值解析与自动替换门槛
+
+    static func runUpdate() {
+        func remoteAsset(_ name: String, scheme: String = "https") -> UpdateRelease.Asset {
+            UpdateRelease.Asset(
+                name: name,
+                url: URL(string: "\(scheme)://github.com/pumf/token_tool/releases/download/v9.9.9/\(name)")!
+            )
+        }
+        let dmg = "TokenTool-9.9.9.dmg"
+        let arm64DMG = "TokenTool-9.9.9-arm64.dmg"
+        let x86DMG = "TokenTool-9.9.9-x86_64.dmg"
+        let arm64ZIP = "TokenTool-9.9.9-arm64.zip"
+        let release = UpdateRelease(
+            version: "9.9.9",
+            tag: "v9.9.9",
+            pageURL: URL(string: "https://github.com/pumf/token_tool/releases/tag/v9.9.9")!,
+            notes: "\(arm64ZIP) 的校验值 \(String(repeating: "c", count: 64))",
+            assets: [dmg, arm64DMG, x86DMG, "TokenTool-9.9.9.zip", arm64ZIP].map { remoteAsset($0) },
+            checksums: UpdateRelease.checksums(fromSHA256SUMS: """
+                \(String(repeating: "a", count: 64))  \(dmg)
+                \(String(repeating: "b", count: 64)) *\(arm64DMG)
+                short \(arm64ZIP)
+                """)
+        )
+
+        test("按当前芯片挑对应的 DMG") {
+            expectEqual(release.installerURL(for: "arm64")?.lastPathComponent, arm64DMG)
+            expectEqual(release.installerURL(for: "x86_64")?.lastPathComponent, x86DMG)
+        }
+        test("缺芯片专属包时退回通用包，而不是抓错另一颗芯片") {
+            let legacy = UpdateRelease(version: "9.9.9", tag: "v9.9.9", pageURL: release.pageURL, notes: "",
+                                       assets: [remoteAsset(dmg), remoteAsset(x86DMG), remoteAsset("TokenTool-9.9.9.zip")])
+            expectEqual(legacy.installerURL(for: "arm64")?.lastPathComponent, dmg)
+        }
+        test("ZIP 与明文清单都不会被当成安装包") {
+            let tricky = UpdateRelease(version: "9.9.9", tag: "v9.9.9", pageURL: release.pageURL, notes: "",
+                                       assets: [remoteAsset("TokenTool-9.9.9.zip"), remoteAsset("SHA256SUMS")])
+            expectNil(tricky.installerURL(for: "arm64"))
+        }
+        test("SHA256SUMS 键统一小写，兼容二进制标记与残行") {
+            expectEqual(release.checksums.count, 2)
+            expectEqual(release.checksum(for: arm64DMG), String(repeating: "b", count: 64))
+            expectEqual(release.checksum(for: dmg.lowercased()), String(repeating: "a", count: 64))
+            expectNil(release.checksum(for: "TokenTool-9.9.9.zip"))
+        }
+        test("没有 SHA256SUMS 时从发布说明里捞校验值") {
+            expectEqual(release.checksum(for: arm64ZIP), String(repeating: "c", count: 64))
+        }
+        test("Release 页面的相对链接补全成 github.com，非 https 直接丢弃") {
+            let html = """
+                <a href="/pumf/token_tool/releases/download/v9.9.9/\(dmg)">\(dmg)</a>
+                <a href="/pumf/token_tool/releases/download/v9.9.9/SHA256SUMS">SHA256SUMS</a>
+                <a href="https://github.com/pumf/token_tool/releases/download/v9.9.9/\(arm64DMG)">\(arm64DMG)</a>
+                <a href="http://example.com/releases/download/v9.9.9/TokenTool-9.9.9.dmg">明文下载</a>
+                <a href="/pumf/token_tool/releases/expanded_assets/v9.9.9">本 releases 页面</a>
+                """
+            let parsed = UpdateRelease.assets(fromExpandedHTML: html, tag: "v9.9.9")
+            // 清单本身也是 release 资产，会一起枚举到；挑安装包时只认 .dmg。
+            expectEqual(parsed.map(\.name), [dmg, "SHA256SUMS", arm64DMG])
+            check(parsed.allSatisfy { $0.url.scheme == "https" }, "解析出了非 https 的地址")
+            check(parsed.allSatisfy { $0.url.host == "github.com" }, "相对链接没有补全成 github.com")
+            expectEqual(
+                UpdateRelease(version: "9.9.9", tag: "v9.9.9", pageURL: release.pageURL, notes: "", assets: parsed)
+                    .installerURL(for: "arm64")?.lastPathComponent,
+                arm64DMG
+            )
+        }
+        test("只有已校验且跑在 /Applications 才自动替换") {
+            let installed = URL(fileURLWithPath: "/Applications/TokenTool.app")
+            check(UpdateInstaller.canInstall(bundleURL: installed, verified: true), "正式安装 + 已校验应允许自动替换")
+            check(!UpdateInstaller.canInstall(bundleURL: installed, verified: false), "没有校验值不能自动替换")
+            check(
+                !UpdateInstaller.canInstall(
+                    bundleURL: URL(fileURLWithPath: "/Users/dev/Project/token_tool/build/TokenTool.app"),
+                    verified: true
+                ),
+                "开发实例不能覆盖自己的 build 目录"
+            )
+            check(
+                !UpdateInstaller.canInstall(bundleURL: URL(fileURLWithPath: "/Applications/Other.app"), verified: true),
+                "只认 TokenTool.app"
+            )
+        }
+        test("版本号按数字段比较，补齐缺失的尾段") {
+            check(UpdateVersion.isNewer("1.7.0", than: "1.6.9"), "1.7.0 应比 1.6.9 新")
+            check(UpdateVersion.isNewer("1.10.0", than: "1.9.0"), "按字典序会误判 1.10 更旧")
+            check(UpdateVersion.isNewer("1.7.1", than: "1.7"), "缺省尾段按 0 补齐")
+            check(!UpdateVersion.isNewer("1.7", than: "1.7.0"), "1.7 与 1.7.0 视为同一个版本")
+            check(!UpdateVersion.isNewer("v1.6.5", than: "1.6.5"), "同一个版本不算新版")
+            check(!UpdateVersion.isNewer("1.6.5", than: "1.7.0"), "旧版本不算新版")
         }
     }
 
