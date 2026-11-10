@@ -63,10 +63,10 @@ enum UsageExport {
     }
 
     @MainActor
-    static func save(_ samples: [UsageProvider: [UsageSample]]) {
+    static func save(_ samples: [UsageProvider: [UsageSample]], days: Int) {
         let panel = NSSavePanel()
         panel.title = "导出用量历史"
-        panel.nameFieldStringValue = "TokenTool-usage-\(dateStamp()).csv"
+        panel.nameFieldStringValue = "TokenTool-usage-\(days)d-\(dateStamp()).csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
         NSApp.activate(ignoringOtherApps: true)

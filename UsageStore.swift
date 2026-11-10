@@ -798,6 +798,15 @@ final class UsageStore: ObservableObject {
         )
     }
 
+    func weekly(for provider: UsageProvider) -> WeeklyUsage? {
+        guard let result = result(for: provider), result.ok == true else { return nil }
+        return UsageAnalytics.weekly(
+            provider: provider,
+            input: usageInput(result),
+            samples: history(for: provider)
+        )
+    }
+
     /// 采集成功且可用的供应商。
     func availableResult(for provider: UsageProvider) -> ProviderResult? {
         guard let result = result(for: provider), result.ok == true else { return nil }
@@ -926,10 +935,11 @@ final class UsageStore: ObservableObject {
         saveHistory()
     }
 
-    func exportHistory() {
+    func exportHistory(days: Int) {
+        let cutoff = Int(Date().timeIntervalSince1970) - days * 86400
         UsageExport.save(Providers.all.reduce(into: [:]) { partial, descriptor in
-            partial[descriptor.id] = history(for: descriptor.id)
-        })
+            partial[descriptor.id] = history(for: descriptor.id).filter { $0.at >= cutoff }
+        }, days: days)
     }
 
     private func evaluateAlerts(provider: UsageProvider, result: ProviderResult) {

@@ -70,11 +70,22 @@ struct UsageInsight: Sendable {
     let isPercent: Bool
 }
 
+struct WeeklyUsage: Sendable {
+    /// 本周至今的消耗（额度或百分点）；领取/重置带来的增加不计入，跨周那一对按时间比例拆分。
+    let thisWeek: Double?
+    /// 上周消耗；上周完全没有采样覆盖时为 nil。周总量按端点差值折算，采样间隙不影响总数，
+    /// 因此不像「昨日参照」那样要求高采样覆盖率。
+    let lastWeek: Double?
+    let isPercent: Bool
+    let weekStart: Date
+    let weekEnd: Date
+}
+
 enum UsageAnalytics {
-    static let historyRetentionDays = 14
+    static let historyRetentionDays = 90
     static let chartDays = 7
     static let sampleInterval: TimeInterval = 300
-    static let maxSamplesPerProvider = 4500
+    static let maxSamplesPerProvider = 26000
     static let defaultLowThreshold = 20.0
     static let lowRecoveryGap = 5.0
     static let lowCooldown: TimeInterval = 12 * 3600
@@ -285,6 +296,83 @@ enum UsageAnalytics {
             netDailyAverage: netDailyAverage,
             observedDays: observedDays,
             isPercent: provider.isPercent
+        )
+    }
+
+    /// 本周与上周的消耗对比。与 insight 同一套口径：只累计剩余量的下降，套餐总量变化整对跳过；
+    /// 窗口制跨重置周期的对也跳过，但一周内多个周期的消耗会累加（今日消耗只看当前周期）。
+    static func weekly(
+        provider: UsageProvider,
+        input: UsageInput,
+        samples: [UsageSample],
+        now: Date = Date()
+    ) -> WeeklyUsage? {
+        let calendar = Calendar.current
+        guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start,
+              let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart),
+              let lastWeekStart = calendar.date(byAdding: .day, value: -7, to: weekStart) else { return nil }
+        let thisStart = weekStart.timeIntervalSince1970
+        let thisEnd = weekEnd.timeIntervalSince1970
+        let lastStart = lastWeekStart.timeIntervalSince1970
+
+        var points: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
+        switch provider.quotaKind {
+        case .credits:
+            for sample in samples {
+                guard Double(sample.at) >= lastStart, let remaining = sample.remaining else { continue }
+                points.append((Double(sample.at), remaining, sample.total, nil))
+            }
+        case .percentWindow:
+            guard let primary = input.windows.first else { return nil }
+            for sample in samples {
+                guard Double(sample.at) >= lastStart,
+                      let item = sample.windows?.first(where: { $0.minutes == primary.minutes }) else { continue }
+                points.append((Double(sample.at), item.remainingPercent, nil, item.resetsAt))
+            }
+        }
+        points.sort { $0.at < $1.at }
+        guard points.count >= 2 else { return nil }
+
+        var thisWeek = 0.0
+        var lastWeek = 0.0
+        var hasThisWeekPair = false
+        var lastWeekCovered = 0.0
+        for index in 1..<points.count {
+            let previous = points[index - 1]
+            let current = points[index]
+            let span = current.at - previous.at
+            guard span > 0 else { continue }
+            if let previousTotal = previous.total,
+               let currentTotal = current.total,
+               abs(previousTotal - currentTotal) > 0.5 {
+                continue
+            }
+            if provider.isPercent,
+               let previousReset = previous.reset,
+               let currentReset = current.reset,
+               previousReset != currentReset {
+                continue
+            }
+            let consumed = previous.value - current.value
+            let thisOverlap = min(current.at, thisEnd) - max(previous.at, thisStart)
+            if thisOverlap > 0 {
+                hasThisWeekPair = true
+                if consumed > 0 { thisWeek += consumed * (thisOverlap / span) }
+            }
+            let lastOverlap = min(current.at, thisStart) - max(previous.at, lastStart)
+            if lastOverlap > 0 {
+                lastWeekCovered += lastOverlap
+                if consumed > 0 { lastWeek += consumed * (lastOverlap / span) }
+            }
+        }
+
+        let weekLength = thisEnd - thisStart
+        return WeeklyUsage(
+            thisWeek: hasThisWeekPair ? thisWeek : nil,
+            lastWeek: lastWeekCovered > 0 ? lastWeek : nil,
+            isPercent: provider.isPercent,
+            weekStart: weekStart,
+            weekEnd: weekEnd
         )
     }
 

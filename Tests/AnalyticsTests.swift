@@ -120,12 +120,30 @@ private func creditForecast(samples: [UsageSample], remaining: Double, total: Do
     )
 }
 
+/// 本周一 00:00（随 Calendar.firstWeekday），周汇总测试以此为锚点构造样本。
+private let weekStart: Date = Calendar.current.dateInterval(of: .weekOfYear, for: noon)!.start
+
+/// 本周一之后若干天（负数为上周）。
+private func weekOffset(_ days: Double) -> Date {
+    weekStart.addingTimeInterval(days * 86400)
+}
+
+private func creditWeekly(samples: [UsageSample], remaining: Double, total: Double = 2600) -> WeeklyUsage? {
+    UsageAnalytics.weekly(
+        provider: .qoder,
+        input: creditInput(remaining: remaining, total: total),
+        samples: samples,
+        now: noon
+    )
+}
+
 @main
 struct AnalyticsSuite {
     static func main() {
         runCurrentPercent()
         runPrune()
         runInsight()
+        runWeekly()
         runCreditForecast()
         runCodexForecast()
         runRampRates()
@@ -169,7 +187,7 @@ struct AnalyticsSuite {
     static func runPrune() {
         test("保留期内之外的样本被裁掉") {
             let samples = [
-                creditSample(at: offset(-40 * 24), remaining: 100),
+                creditSample(at: offset(-100 * 24), remaining: 100),
                 creditSample(at: offset(-10 * 24), remaining: 200),
                 creditSample(at: offset(-1), remaining: 300),
             ]
@@ -320,6 +338,80 @@ struct AnalyticsSuite {
                 now: noon
             )
             expectNil(insight)
+        }
+    }
+
+    // MARK: 每周汇总
+
+    static func runWeekly() {
+        test("本周消耗只算下降，领取回补不计入") {
+            let samples = [
+                creditSample(at: weekOffset(0), remaining: 1000),
+                creditSample(at: weekOffset(1.0 / 24), remaining: 900),
+                creditSample(at: weekOffset(2.0 / 24), remaining: 1000),   // 领取回补 100
+                creditSample(at: weekOffset(3.0 / 24), remaining: 950),
+            ]
+            let weekly = creditWeekly(samples: samples, remaining: 950)
+            expectClose(weekly?.thisWeek, 150)
+            expectNil(weekly?.lastWeek)
+            expectEqual(weekly?.isPercent, false)
+        }
+        test("上周满采时给对比，跨周那一对按时间比例拆分") {
+            // 上周每小时掉 1（周一 00:00 到周日 23:00 共 167），跨周对 2 小时掉 20 → 各分 10。
+            var samples = (0...167).map { hour in
+                creditSample(at: weekOffset(-7 + Double(hour) / 24), remaining: 2000 - Double(hour))
+            }
+            samples.append(creditSample(at: weekOffset(1.0 / 24), remaining: 1813))
+            let weekly = creditWeekly(samples: samples, remaining: 1813)
+            expectClose(weekly?.thisWeek, 10)
+            expectClose(weekly?.lastWeek, 177)
+        }
+        test("上周有采样即给对比，间隙按端点差值折算") {
+            // 上周只采到两天，但端点差值仍能给出周总量（间隙里剩余没掉就是没消耗）。
+            var samples = [
+                creditSample(at: weekOffset(-7), remaining: 1000),
+                creditSample(at: weekOffset(-6), remaining: 900),
+            ]
+            samples.append(creditSample(at: weekOffset(0), remaining: 900))
+            samples.append(creditSample(at: weekOffset(1.0 / 24), remaining: 880))
+            let weekly = creditWeekly(samples: samples, remaining: 880)
+            expectClose(weekly?.thisWeek, 20)
+            expectClose(weekly?.lastWeek, 100)
+        }
+        test("套餐总量变化带来的增加整对跳过") {
+            let samples = [
+                creditSample(at: weekOffset(0), remaining: 500, total: 2600),
+                creditSample(at: weekOffset(1.0 / 24), remaining: 1500, total: 6000),
+                creditSample(at: weekOffset(2.0 / 24), remaining: 1400, total: 6000),
+            ]
+            let weekly = creditWeekly(samples: samples, remaining: 1400, total: 6000)
+            expectClose(weekly?.thisWeek, 100)
+        }
+        test("Codex 一周内多个重置周期的消耗累加，跨重置对跳过") {
+            let resetA = Int(weekOffset(1).timeIntervalSince1970)
+            let resetB = Int(weekOffset(2).timeIntervalSince1970)
+            let samples = [
+                codexSample(at: weekOffset(0), minutes: 300, remainingPercent: 80, resetsAt: resetA),
+                codexSample(at: weekOffset(1.0 / 24), minutes: 300, remainingPercent: 60, resetsAt: resetA),
+                codexSample(at: weekOffset(2.0 / 24), minutes: 300, remainingPercent: 100, resetsAt: resetB),
+                codexSample(at: weekOffset(3.0 / 24), minutes: 300, remainingPercent: 70, resetsAt: resetB),
+            ]
+            let weekly = UsageAnalytics.weekly(
+                provider: .codex,
+                input: codexInput(minutes: 300, remainingPercent: 70, resetsAt: resetB),
+                samples: samples,
+                now: noon
+            )
+            expectClose(weekly?.thisWeek, 50)
+            expectEqual(weekly?.isPercent, true)
+        }
+        test("只有上周样本时本周为空") {
+            let samples = (0...168).map { hour in
+                creditSample(at: weekOffset(-7 + Double(hour) / 24), remaining: 2000 - Double(hour))
+            }
+            let weekly = creditWeekly(samples: samples, remaining: 1832)
+            expectNil(weekly?.thisWeek)
+            expectClose(weekly?.lastWeek, 168)
         }
     }
 

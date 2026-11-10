@@ -703,6 +703,7 @@ struct MenuContent: View {
             attentionStrip
             updateBanner
             providerCards
+            weeklySummary
             quickBar
             if settingsExpanded {
                 settingsPanel
@@ -1038,6 +1039,91 @@ struct MenuContent: View {
         ForEach(Providers.ordered, id: \.id) { descriptor in
             providerCard(descriptor.id)
         }
+    }
+
+    /// 本周汇总：各平台本周消耗与上周对比，细条是本周消耗占当前总额度的比例（平台分布）。
+    /// 简单模式与完全没有本周数据时不占面板高度。
+    @ViewBuilder
+    private var weeklySummary: some View {
+        if !store.simpleMode {
+            let rows = Providers.ordered.compactMap { descriptor -> (ProviderDescriptor, WeeklyUsage)? in
+                guard let weekly = store.weekly(for: descriptor.id), weekly.thisWeek != nil else { return nil }
+                return (descriptor, weekly)
+            }
+            if let first = rows.first {
+                VStack(alignment: .leading, spacing: Token.spaceRow) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Text("本周汇总")
+                            .font(Token.title)
+                        Spacer()
+                        Text(weekRangeText(first.1))
+                            .font(Token.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(rows, id: \.0.id) { descriptor, weekly in
+                        weeklyRow(descriptor, weekly)
+                    }
+                }
+                .padding(Token.spaceRow + 2)
+                .background(
+                    RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                        .fill(Token.insetFill)
+                )
+                .help("只统计剩余量的下降，领取/重置带来的增加不计入；细条为本周消耗占当前总额度的比例。上周完全没有采样时不显示对比。")
+            }
+        }
+    }
+
+    private func weekRangeText(_ weekly: WeeklyUsage) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M/d"
+        let lastDay = weekly.weekEnd.addingTimeInterval(-86400)
+        return "\(formatter.string(from: weekly.weekStart))–\(formatter.string(from: lastDay))"
+    }
+
+    private func weeklyRow(_ descriptor: ProviderDescriptor, _ weekly: WeeklyUsage) -> some View {
+        let total = store.result(for: descriptor.id)?.total
+        let fraction: Double = {
+            guard let value = weekly.thisWeek else { return 0 }
+            if weekly.isPercent { return min(1, value / 100) }
+            guard let total, total > 0 else { return 0 }
+            return min(1, value / total)
+        }()
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(descriptor.color)
+                .frame(width: 6, height: 6)
+            Text(descriptor.displayName)
+                .font(Token.label)
+                .frame(width: 70, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(descriptor.color.opacity(0.15))
+                    Capsule()
+                        .fill(descriptor.color.opacity(0.75))
+                        .frame(width: max(2, proxy.size.width * fraction))
+                }
+            }
+            .frame(height: 3)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(weeklyValueText(weekly.thisWeek, isPercent: weekly.isPercent))
+                    .font(Token.body)
+                Text(weekly.lastWeek.map { "上周 \(weeklyValueText($0, isPercent: weekly.isPercent))" } ?? "上周 —")
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 96, alignment: .trailing)
+        }
+    }
+
+    private func weeklyValueText(_ value: Double?, isPercent: Bool) -> String {
+        guard let value else { return "--" }
+        return isPercent ? Format.percentDetailed(value) : "\(Format.credits(value)) 额度"
     }
 
     private func providerCard(_ provider: UsageProvider) -> some View {
@@ -1760,13 +1846,19 @@ struct MenuContent: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             Spacer()
-            Button("导出") {
-                store.exportHistory()
+            Menu {
+                Button("近 7 天") { store.exportHistory(days: 7) }
+                Button("近 14 天") { store.exportHistory(days: 14) }
+                Button("近 30 天") { store.exportHistory(days: 30) }
+                Button("近 90 天") { store.exportHistory(days: 90) }
+            } label: {
+                Text("导出")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .help("导出近 14 天用量历史为 CSV")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("按范围导出用量历史为 CSV")
             Button("诊断") {
                 Apps.revealDiagnostics()
             }
