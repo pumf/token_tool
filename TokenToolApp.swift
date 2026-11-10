@@ -91,6 +91,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var blinkTimer: Timer?
     private var blinkDimmed = false
     private var rollTimer: Timer?
+    private var hotKey: GlobalHotKey?
 
     init(store: UsageStore, updates: UpdateChecker) {
         self.store = store
@@ -138,6 +139,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
+        hotKey = GlobalHotKey { [weak self] in self?.togglePopoverFromHotKey() }
+        store.$hotKeyEnabled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.syncHotKey() }
+            }
+            .store(in: &cancellables)
+
         applyMaxHeightIfNeeded()
         updateTitle()
         syncBlink()
@@ -161,6 +170,22 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             self?.resizeIfNeeded()
         }
         store.refreshStaleForPanel()
+    }
+
+    /// 热键展开时应用可能不在前台，先激活让面板能接收键盘输入（如预算输入框）。
+    private func togglePopoverFromHotKey() {
+        if !popover.isShown {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        togglePopover(nil)
+    }
+
+    private func syncHotKey() {
+        if store.hotKeyEnabled {
+            hotKey?.register()
+        } else {
+            hotKey?.unregister()
+        }
     }
 
     func popoverDidClose(_ notification: Notification) {

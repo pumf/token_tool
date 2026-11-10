@@ -366,7 +366,6 @@ enum UsageAnalytics {
             }
         }
 
-        let weekLength = thisEnd - thisStart
         return WeeklyUsage(
             thisWeek: hasThisWeekPair ? thisWeek : nil,
             lastWeek: lastWeekCovered > 0 ? lastWeek : nil,

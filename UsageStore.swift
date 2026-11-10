@@ -70,6 +70,10 @@ final class UsageStore: ObservableObject {
     @Published var menuBarStyle: MenuBarStyle {
         didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: "menuBar.style") }
     }
+    /// 全局快捷键 ⌥⇧T 展开/收起面板。
+    @Published var hotKeyEnabled: Bool {
+        didSet { UserDefaults.standard.set(hotKeyEnabled, forKey: "hotkey.enabled") }
+    }
     @Published private(set) var attentionItems: [AttentionItem] = []
     @Published private(set) var attentionSince: Date?
     @Published private(set) var mutedUntil: Date?
@@ -117,6 +121,7 @@ final class UsageStore: ObservableObject {
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
         simpleMode = UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool ?? false
         menuBarStyle = MenuBarStyle(rawValue: UserDefaults.standard.string(forKey: "menuBar.style") ?? "") ?? .classic
+        hotKeyEnabled = Self.storedFlag("hotkey.enabled")
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
         mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
         for descriptor in Providers.all {

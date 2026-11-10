@@ -1568,6 +1568,15 @@ struct MenuContent: View {
                 help: "三个平台只显示主要用量与今日消耗，隐藏预测与更新时间"
             )
         }
+        settingRow("快捷键") {
+            settingChip(
+                "⌥⇧T 面板",
+                isOn: $store.hotKeyEnabled,
+                iconOn: "keyboard.fill",
+                iconOff: "keyboard",
+                help: "在任意应用中按 ⌥⇧T 展开或收起面板，无需辅助访问权限"
+            )
+        }
     }
 
     @ViewBuilder
