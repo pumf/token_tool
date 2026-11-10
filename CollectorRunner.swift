@@ -90,6 +90,10 @@ enum CollectorRunner {
         process.environment = environment
         process.standardOutput = outputHandle
         process.standardError = errorHandle
+        // 退出事件用信号量等，不 sleep 轮询；handler 必须在 run 之前装好，
+        // 否则秒退的子进程可能错过信号。
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
             didLaunch = true
@@ -97,11 +101,7 @@ enum CollectorRunner {
             return .failure("无法启动采集器：\(error.localizedDescription)")
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        let timedOut = process.isRunning
+        let timedOut = exited.wait(timeout: .now() + timeout) == .timedOut
         if didLaunch { reap(process) }
         let stderr = readTail(of: errorURL, bytes: 600)
         if timedOut {

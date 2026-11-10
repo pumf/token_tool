@@ -510,11 +510,17 @@ final class UsageStore: ObservableObject {
         for target in batch { states[target.provider]?.isRefreshing = true }
         Task.detached(priority: .utility) { [weak self] in
             guard let store = self else { return }
-            // 逐个采集、采完立刻回主线程更新：慢的一家（最多等满自己的超时）不会压着
-            // 已经采好的一家让面板等到最后才刷新。
-            for target in batch {
-                let run = CollectorRunner.run(provider: target.name, timeout: target.timeout)
-                await MainActor.run { store.consume(run, from: target) }
+            // 组内并行采集、谁先采完谁先回主线程更新：慢的一家（最多等满自己的超时）
+            // 不会压着已经采好的一家让面板等到最后才刷新。
+            await withTaskGroup(of: (CollectorRunner.RunResult, CollectionTarget).self) { group in
+                for target in batch {
+                    group.addTask {
+                        (CollectorRunner.run(provider: target.name, timeout: target.timeout), target)
+                    }
+                }
+                for await (run, target) in group {
+                    await MainActor.run { store.consume(run, from: target) }
+                }
             }
             await MainActor.run {
                 let finished = Date()
