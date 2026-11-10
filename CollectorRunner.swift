@@ -168,7 +168,9 @@ enum LaunchAtLogin {
     }
 
     static var isEnabled: Bool {
+        // plist 存在不代表真的会启动：被 bootout、disable 或加载失败时以 launchd 的实际状态为准。
         FileManager.default.fileExists(atPath: plistURL.path)
+            && run(["/bin/launchctl", "print", "gui/\(getuid())/\(label)"]) == 0
     }
 
     static func setEnabled(_ enabled: Bool) {
@@ -191,6 +193,8 @@ enum LaunchAtLogin {
             )
             try? data.write(to: plistURL, options: .atomic)
             _ = run(["/bin/launchctl", "enable", "gui/\(getuid())/\(label)"])
+            // 立即加载让开关当场生效，而不是只写文件等下次登录；已加载时 bootstrap 报错，忽略即可。
+            _ = run(["/bin/launchctl", "bootstrap", "gui/\(getuid())", plistURL.path])
         } else {
             _ = run(["/bin/launchctl", "bootout", "gui/\(getuid())/\(label)"])
             try? manager.removeItem(at: plistURL)
