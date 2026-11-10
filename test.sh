@@ -1,5 +1,5 @@
 #!/bin/zsh
-# 编译并运行 Analytics 回归测试。
+# 编译并运行回归测试：Swift 侧是纯函数与视图口径，Python 侧是 collector.py 的解析层。
 # 本机只有 CommandLineTools，没有 Xcode，XCTest / swift-testing 均不可用，
 # 因此测试与源码一起用 swiftc 编成可执行文件（与 build.sh 同一套编译方式）。
 set -euo pipefail
@@ -17,3 +17,6 @@ swiftc -Onone -parse-as-library \
     -o build/TokenToolTests
 
 ./build/TokenToolTests
+
+# collector.py 只测解析层：喂固定文本，不启动任何 CLI 或本机 IPC。
+python3 Tests/CollectorTests.py
