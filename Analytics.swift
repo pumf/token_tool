@@ -376,6 +376,57 @@ enum UsageAnalytics {
         )
     }
 
+    /// 本月至今的消耗（额度或百分点），口径与 weekly 相同：只累计下降，套餐总量变化整对跳过，
+    /// 窗口制跨重置周期的对也跳过。额度制平台用于月度预算告警；本月样本不足两个时为 nil。
+    static func monthConsumed(
+        provider: UsageProvider,
+        input: UsageInput,
+        samples: [UsageSample],
+        now: Date = Date()
+    ) -> Double? {
+        guard let monthStart = Calendar.current.dateInterval(of: .month, for: now)?.start else { return nil }
+        let start = monthStart.timeIntervalSince1970
+        let nowTs = now.timeIntervalSince1970
+        var points: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
+        switch provider.quotaKind {
+        case .credits:
+            for sample in samples {
+                guard Double(sample.at) >= start, Double(sample.at) <= nowTs,
+                      let remaining = sample.remaining else { continue }
+                points.append((Double(sample.at), remaining, sample.total, nil))
+            }
+        case .percentWindow:
+            guard let primary = input.windows.first else { return nil }
+            for sample in samples {
+                guard Double(sample.at) >= start, Double(sample.at) <= nowTs,
+                      let item = sample.windows?.first(where: { $0.minutes == primary.minutes }) else { continue }
+                points.append((Double(sample.at), item.remainingPercent, nil, item.resetsAt))
+            }
+        }
+        points.sort { $0.at < $1.at }
+        guard points.count >= 2 else { return nil }
+        var consumed = 0.0
+        for index in 1..<points.count {
+            let previous = points[index - 1]
+            let current = points[index]
+            guard current.at - previous.at > 0 else { continue }
+            if let previousTotal = previous.total,
+               let currentTotal = current.total,
+               abs(previousTotal - currentTotal) > 0.5 {
+                continue
+            }
+            if provider.isPercent,
+               let previousReset = previous.reset,
+               let currentReset = current.reset,
+               previousReset != currentReset {
+                continue
+            }
+            let delta = previous.value - current.value
+            if delta > 0 { consumed += delta }
+        }
+        return consumed
+    }
+
     static func rampRates(
         provider: UsageProvider,
         input: UsageInput,

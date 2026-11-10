@@ -1662,6 +1662,20 @@ struct MenuContent: View {
                     }
                 }
             }
+            settingRow("月度预算") {
+                TextField("0", value: $store.monthlyBudget, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 76)
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                Text("额度")
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+                Text("0 关闭")
+                    .font(Token.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .help("额度制平台本月消耗超过该值时提醒，每家独立计数；填 0 关闭。")
         }
     }
 

@@ -137,6 +137,13 @@ private func creditWeekly(samples: [UsageSample], remaining: Double, total: Doub
     )
 }
 
+/// 本月 1 号 00:00，月度预算测试以此为锚点。
+private let monthStart: Date = Calendar.current.dateInterval(of: .month, for: noon)!.start
+
+private func monthOffset(_ days: Double) -> Date {
+    monthStart.addingTimeInterval(days * 86400)
+}
+
 @main
 struct AnalyticsSuite {
     static func main() {
@@ -144,6 +151,7 @@ struct AnalyticsSuite {
         runPrune()
         runInsight()
         runWeekly()
+        runMonthConsumed()
         runCreditForecast()
         runCodexForecast()
         runRampRates()
@@ -412,6 +420,47 @@ struct AnalyticsSuite {
             let weekly = creditWeekly(samples: samples, remaining: 1832)
             expectNil(weekly?.thisWeek)
             expectClose(weekly?.lastWeek, 168)
+        }
+    }
+
+    // MARK: 月度消耗
+
+    static func runMonthConsumed() {
+        func consumed(_ samples: [UsageSample], remaining: Double, total: Double = 2600) -> Double? {
+            UsageAnalytics.monthConsumed(
+                provider: .qoder,
+                input: creditInput(remaining: remaining, total: total),
+                samples: samples,
+                now: noon
+            )
+        }
+        test("本月消耗只算下降，领取回补不计入") {
+            let samples = [
+                creditSample(at: monthOffset(0), remaining: 1000),
+                creditSample(at: monthOffset(1.0 / 24), remaining: 900),
+                creditSample(at: monthOffset(2.0 / 24), remaining: 1000),
+                creditSample(at: monthOffset(3.0 / 24), remaining: 950),
+            ]
+            expectClose(consumed(samples, remaining: 950), 150)
+        }
+        test("套餐总量变化带来的增加整对跳过") {
+            let samples = [
+                creditSample(at: monthOffset(0), remaining: 500, total: 2600),
+                creditSample(at: monthOffset(1.0 / 24), remaining: 1500, total: 6000),
+                creditSample(at: monthOffset(2.0 / 24), remaining: 1400, total: 6000),
+            ]
+            expectClose(consumed(samples, remaining: 1400, total: 6000), 100)
+        }
+        test("本月样本不足两个时不给消耗") {
+            expectNil(consumed([creditSample(at: monthOffset(0), remaining: 1000)], remaining: 1000))
+        }
+        test("上月样本不计入本月") {
+            let samples = [
+                creditSample(at: monthOffset(-1), remaining: 2000),
+                creditSample(at: monthOffset(0), remaining: 1000),
+                creditSample(at: monthOffset(1.0 / 24), remaining: 950),
+            ]
+            expectClose(consumed(samples, remaining: 950), 50)
         }
     }
 

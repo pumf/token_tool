@@ -50,6 +50,14 @@ final class UsageStore: ObservableObject {
             recomputeAttention(now: Date())
         }
     }
+    /// 额度制平台的月度预算（额度），本月消耗超过它时告警；0 表示关闭。
+    @Published var monthlyBudget: Int {
+        didSet {
+            monthlyBudget = max(0, monthlyBudget)
+            UserDefaults.standard.set(monthlyBudget, forKey: "alert.budget.monthly")
+            recomputeAttention(now: Date())
+        }
+    }
     @Published var menuBarHighlight: Bool {
         didSet { UserDefaults.standard.set(menuBarHighlight, forKey: "attention.menuBar.highlight") }
     }
@@ -104,6 +112,7 @@ final class UsageStore: ObservableObject {
         alertExhaustion = Self.storedFlag("alert.exhaustion")
         alertAcceleration = Self.storedFlag("alert.acceleration")
         lowBalanceThreshold = Self.storedLowThreshold()
+        monthlyBudget = max(0, UserDefaults.standard.integer(forKey: "alert.budget.monthly"))
         menuBarHighlight = Self.storedFlag("attention.menuBar.highlight")
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
         simpleMode = UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool ?? false
@@ -254,6 +263,11 @@ final class UsageStore: ObservableObject {
         )
     }
 
+    private static func monthKey(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", components.year ?? 0, components.month ?? 0)
+    }
+
     private func recomputeAttention(now: Date) {
         if let mutedUntil, mutedUntil <= now {
             self.mutedUntil = nil
@@ -297,27 +311,47 @@ final class UsageStore: ObservableObject {
                 canDismiss: false
             )
         }
-        guard alertExhaustion,
-              let forecast = forecast(for: provider),
-              forecast.warning,
-              forecast.text.hasSuffix("后耗尽") else { return nil }
-
-        let detail: String
-        if provider.isPercent,
-           let risk = forecast.windows.filter({ $0.exhaustsBeforeReset })
-               .min(by: { $0.exhaustAt < $1.exhaustAt }),
-           let reset = risk.resetsAt {
-            detail = "预计 \(Format.reset(Int(risk.exhaustAt.timeIntervalSince1970))) 耗尽，早于重置时间 \(Format.reset(Int(reset.timeIntervalSince1970)))。"
-        } else {
-            detail = "按近期净消耗速度估算，剩余额度撑不到下一次领取或重置。"
+        if alertExhaustion,
+           let forecast = forecast(for: provider),
+           forecast.warning,
+           forecast.text.hasSuffix("后耗尽") {
+            let detail: String
+            if provider.isPercent,
+               let risk = forecast.windows.filter({ $0.exhaustsBeforeReset })
+                   .min(by: { $0.exhaustAt < $1.exhaustAt }),
+               let reset = risk.resetsAt {
+                detail = "预计 \(Format.reset(Int(risk.exhaustAt.timeIntervalSince1970))) 耗尽，早于重置时间 \(Format.reset(Int(reset.timeIntervalSince1970)))。"
+            } else {
+                detail = "按近期净消耗速度估算，剩余额度撑不到下一次领取或重置。"
+            }
+            return AttentionItem(
+                id: "exhaust.\(provider.rawValue)",
+                provider: provider,
+                kind: .warning,
+                icon: "hourglass",
+                title: "\(provider.displayName) \(forecast.text)",
+                detail: detail,
+                actionTitle: "打开 \(provider.descriptor.clientName)",
+                canDismiss: false
+            )
         }
+        return budgetWarningItem(provider: provider, input: input)
+    }
+
+    /// 月度预算超支：额度制平台本月消耗超过设定值时常驻提示，随月初消耗清零自动消失。
+    private func budgetWarningItem(provider: UsageProvider, input: UsageInput) -> AttentionItem? {
+        guard monthlyBudget > 0, !provider.isPercent,
+              let consumed = UsageAnalytics.monthConsumed(
+                  provider: provider, input: input, samples: history(for: provider)
+              ),
+              consumed > Double(monthlyBudget) else { return nil }
         return AttentionItem(
-            id: "exhaust.\(provider.rawValue)",
+            id: "budget.\(provider.rawValue)",
             provider: provider,
             kind: .warning,
-            icon: "hourglass",
-            title: "\(provider.displayName) \(forecast.text)",
-            detail: detail,
+            icon: "chart.line.uptrend.xyaxis",
+            title: "\(provider.displayName) 本月消耗超预算",
+            detail: "本月已消耗 \(Format.credits(consumed)) 额度，超出 \(Format.credits(Double(monthlyBudget))) 额度预算。",
             actionTitle: "打开 \(provider.descriptor.clientName)",
             canDismiss: false
         )
@@ -949,6 +983,8 @@ final class UsageStore: ObservableObject {
         evaluateLowAlert(provider: provider, input: input, now: now)
         if provider.isPercent {
             evaluateExhaustionAlert(provider: provider, input: input, now: now)
+        } else {
+            evaluateBudgetAlert(provider: provider, input: input, now: now)
         }
         evaluateAccelerationAlert(provider: provider, input: input, now: now)
     }
@@ -1064,6 +1100,28 @@ final class UsageStore: ObservableObject {
             provider: provider
         ) {
             defaults.set(epoch, forKey: key)
+        }
+    }
+
+    /// 月度预算告警：每家额度制平台独立计数，本月消耗超预算时通知一次，按月去重，
+    /// 月初消耗清零后自然重新布防。
+    private func evaluateBudgetAlert(provider: UsageProvider, input: UsageInput, now: Date) {
+        guard monthlyBudget > 0,
+              let consumed = UsageAnalytics.monthConsumed(
+                  provider: provider, input: input, samples: history(for: provider), now: now
+              ),
+              consumed > Double(monthlyBudget) else { return }
+        let defaults = UserDefaults.standard
+        let key = "alert.budget.\(provider.rawValue).month"
+        let monthKey = Self.monthKey(now)
+        guard defaults.string(forKey: key) != monthKey else { return }
+        deliverAlert(
+            id: "alert.budget.\(provider.rawValue)",
+            title: "\(provider.displayName) 本月消耗超出预算",
+            body: "本月已消耗 \(Format.credits(consumed)) 额度，超过设定的 \(Format.credits(Double(monthlyBudget))) 额度预算。",
+            provider: provider
+        ) {
+            defaults.set(monthKey, forKey: key)
         }
     }
 
