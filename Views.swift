@@ -765,14 +765,12 @@ struct MenuContent: View {
         HStack(spacing: Token.spaceTight) {
             Image(systemName: "clock")
                 .font(.system(size: 10, weight: .semibold))
-            ForEach(Array(store.refreshSummaries.enumerated()), id: \.offset) { index, summary in
-                if index > 0 {
-                    Text("·").foregroundStyle(.quaternary)
-                }
-                Text("\(summary.label) \(Format.time(summary.at))")
-                    .lineLimit(1)
-                    .fixedSize()
-            }
+            // 四组节奏逐项 fixedSize 会把这一行顶到 382 之外，整块面板居中溢出、左右各被切掉一截；
+            // 合成一段文本后可以从中间截断，右侧的开关才不会被挤出去。
+            Text(store.refreshSummaries.map { "\($0.label) \(Format.time($0.at))" }
+                    .joined(separator: " · "))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: Token.spaceTight)
             settingChip(
                 "预警 \(store.lowBalanceThreshold)%",
@@ -1592,7 +1590,7 @@ struct MenuContent: View {
                 styleChip(style)
             }
         }
-        settingRow("菜单栏") {
+        settingWideRow("菜单栏") {
             ForEach(Providers.ordered, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
@@ -1621,8 +1619,24 @@ struct MenuContent: View {
         }
     }
 
+    /// 逐平台的开关行：四家一排会顶出 382 的面板宽度，所以标签独占一行、开关整行铺开。
+    private func settingWideRow<Chips: View>(
+        _ label: String,
+        @ViewBuilder chips: () -> Chips
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Token.spaceTight) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: Token.spaceTight) {
+                chips()
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
     private var reminderSettings: some View {
-        settingRow("提醒") {
+        settingWideRow("提醒") {
             ForEach(Providers.ordered, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
