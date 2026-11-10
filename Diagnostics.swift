@@ -67,12 +67,19 @@ enum Diagnostics {
     }
 
     private static let sensitivePatterns = [
-        "(?i)(token|secret|password|passwd|api[_-]?key|authorization|code)[=: ]+\\S+",
+        // 关键词后面只吃掉「像凭据」的 ASCII 串。旧写法允许用空格分隔且值取 \\S+，
+        // 「Claude Code 数据不可用」会整段被判成敏感值打码，日志反而看不懂了。
+        // 「Bearer xxx」先整段吃掉：否则关键词规则只打掉前一个词，后面的真凭据反而留下。
+        "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9+/=_.-]{4,}",
+        // 不加词首边界，refresh_token 这类带前缀的键名也要一起打码。
+        // code 只在带显式分隔符时打码，产品名「Claude Code」后面的中文不再受影响。
+        "(?i)(token|secret|password|passwd|api[_-]?key|authorization|code)\\s*[:=]\\s*[A-Za-z0-9+/=_.-]{4,}",
+        "(?i)(token|secret|password|passwd|api[_-]?key|authorization)\\s+[A-Za-z0-9+/=_.-]{6,}",
         "[A-Za-z0-9+/=_-]{24,}",
         "\\?\\S+",
     ]
 
-    private static func sanitize(_ value: String) -> String {
+    static func sanitize(_ value: String) -> String {
         var result = value
         for pattern in sensitivePatterns {
             result = result.replacingOccurrences(

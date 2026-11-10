@@ -162,6 +162,7 @@ struct AnalyticsSuite {
         runExport()
         runMenuBar()
         runUpdate()
+        runDiagnostics()
 
         print("\n\(checks) 项断言，\(failures) 项失败")
         exit(failures == 0 ? 0 : 1)
@@ -1076,6 +1077,37 @@ struct AnalyticsSuite {
             check(!UpdateVersion.isNewer("1.7", than: "1.7.0"), "1.7 与 1.7.0 视为同一个版本")
             check(!UpdateVersion.isNewer("v1.6.5", than: "1.6.5"), "同一个版本不算新版")
             check(!UpdateVersion.isNewer("1.6.5", than: "1.7.0"), "旧版本不算新版")
+        }
+    }
+
+    // MARK: 诊断日志脱敏
+
+    static func runDiagnostics() {
+        test("凭据类关键词后面的值被打码") {
+            check(Diagnostics.sanitize("qoder token: abcdef123456").contains("<redacted>"), "token 冒号形式没打码")
+            check(Diagnostics.sanitize("refresh_token=abcdefghijklmnop").contains("<redacted>"), "等号形式没打码")
+            check(Diagnostics.sanitize("authorization Bearer abcdef123456").contains("<redacted>"), "Bearer 头没打码")
+            check(!Diagnostics.sanitize("authorization Bearer abcdef123456").contains("abcdef123456"), "Bearer 后面的凭据残留")
+            check(Diagnostics.sanitize("WBIPC 返回 code: -32001").contains("<redacted>"), "错误码没打码")
+            check(Diagnostics.sanitize("https://x.com/cb?code=abc12345&state=1").contains("<redacted>"), "查询参数没打码")
+            check(!Diagnostics.sanitize("https://x.com/cb?code=abc12345&state=1").contains("abc12345"), "查询参数残留原文")
+        }
+        test("长随机串一律打码") {
+            let leaked = Diagnostics.sanitize("异常输出 \(String(repeating: "K", count: 40)) 已丢弃")
+            check(leaked.contains("<redacted>"), "40 位串没打码")
+            check(!leaked.contains(String(repeating: "K", count: 40)), "长串残留原文")
+        }
+        test("中文文案与产品名不被误伤") {
+            // 「Claude Code 数据不可用」这类句子必须原样留在日志里，否则排查时读不懂。
+            let message = "Claude Code 数据不可用：Claude Code 按 API 计费，没有订阅额度窗口"
+            expectEqual(Diagnostics.sanitize(message), message)
+            let hotKey = "⌥⇧T 注册失败（-17368），组合键可能被其他应用占用"
+            expectEqual(Diagnostics.sanitize(hotKey), hotKey)
+            let http = "GitHub 返回 HTTP 403"
+            expectEqual(Diagnostics.sanitize(http), http)
+        }
+        test("超长详情截断到 220 字以内") {
+            check(Diagnostics.sanitize(String(repeating: "说", count: 400)).count <= 220, "详情没有截断")
         }
     }
 
