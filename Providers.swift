@@ -60,6 +60,9 @@ struct ProviderDescriptor: Sendable {
     /// 面板展开时是否补采一次。采集节奏慢、又是用户点开面板最想立刻看到的一家才需要。
     let refreshOnPanelOpen: Bool
     let setup: ProviderSetup
+    /// 首次在菜单栏是否显示。新接入的一家默认关掉，等用户自己去设置里打开，
+    /// 避免一升级就多出几个菜单栏项挤占空间。
+    let defaultInMenuBar: Bool
 
     var isPercent: Bool { quotaKind == .percentWindow }
 }
@@ -89,7 +92,8 @@ enum Providers {
             reminderDefaultsKey: "reminder.qoder.claim",
             menuBarDefaultsKey: "menuBar.qoder",
             refreshOnPanelOpen: true,
-            setup: .qoderCLI
+            setup: .qoderCLI,
+            defaultInMenuBar: true
         ),
         ProviderDescriptor(
             id: .workbuddy,
@@ -114,7 +118,8 @@ enum Providers {
             reminderDefaultsKey: "reminder.workbuddy.claim",
             menuBarDefaultsKey: "menuBar.workbuddy",
             refreshOnPanelOpen: false,
-            setup: .none
+            setup: .none,
+            defaultInMenuBar: true
         ),
         ProviderDescriptor(
             id: .codex,
@@ -139,7 +144,34 @@ enum Providers {
             reminderDefaultsKey: "reminder.codex.reset",
             menuBarDefaultsKey: "menuBar.codex",
             refreshOnPanelOpen: false,
-            setup: .none
+            setup: .none,
+            defaultInMenuBar: true
+        ),
+        ProviderDescriptor(
+            id: .claude,
+            collectorKey: "claude",
+            displayName: "Claude Code",
+            subtitle: "官方 CLI · 限额窗口",
+            icon: "sparkles",
+            menuBarLetter: "A",
+            color: Theme.claude,
+            quotaKind: .percentWindow,
+            creditUnit: "",
+            creditLayout: nil,
+            refreshInterval: 120,
+            collectorTimeout: 75,
+            clientName: "Claude",
+            clientBundleID: "com.anthropic.claudefordesktop",
+            clientAppPath: "/Applications/Claude.app",
+            clientHelp: "打开 Claude",
+            websiteURL: "https://claude.com/claude-code",
+            websiteHelp: "打开 Claude Code 官网",
+            claimReminder: .windowReset,
+            reminderDefaultsKey: "reminder.claude.reset",
+            menuBarDefaultsKey: "menuBar.claude",
+            refreshOnPanelOpen: false,
+            setup: .none,
+            defaultInMenuBar: false
         ),
     ]
 

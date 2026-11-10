@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect local usage for Codex, WorkBuddy and Qoder without touching credentials."""
+"""Collect local usage for Codex, WorkBuddy, Qoder and Claude Code without touching credentials."""
 
 from __future__ import annotations
 
@@ -766,6 +766,162 @@ def qoder_login_status():
     }
 
 
+# ------------------------------------------------------------ Claude Code
+
+CLAUDE_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+CLAUDE_UNIT_SECONDS = {"d": 86400.0, "h": 3600.0, "m": 60.0, "s": 1.0}
+# /usage 的订阅额度分两个窗口：5 小时会话窗口与 7 天周窗口，和 Codex 一样归到窗口制口径。
+CLAUDE_WINDOWS = (
+    ("session", 300, ("current session",)),
+    ("week", 10080, ("current week", "this week")),
+)
+
+
+def claude_binary():
+    for path in (
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+        HOME / ".claude" / "local" / "claude",
+    ):
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return shutil.which("claude")
+
+
+def claude_run(binary, args, timeout):
+    env = dict(os.environ)
+    # 采集是后台子进程，绝不允许触发自动更新去改写用户的 CLI。
+    env["DISABLE_AUTOUPDATER"] = "1"
+    return subprocess.run(
+        [binary] + list(args), capture_output=True, text=True, timeout=timeout, env=env
+    ).stdout
+
+
+def claude_json(raw):
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def claude_line(text, label):
+    for raw in text.splitlines():
+        if label in raw.lower():
+            return raw
+    return None
+
+
+def claude_percent(line):
+    """取窗口已用百分比；「X% left / remaining」这种反向表述换算成已用。"""
+    if not line:
+        return None
+    used = re.search(r"(\d+(?:\.\d+)?)\s*%\s*used", line, re.I)
+    if used:
+        return max(0.0, min(100.0, number(used.group(1))))
+    left = re.search(r"(\d+(?:\.\d+)?)\s*%\s*(?:left|remaining)", line, re.I)
+    if left:
+        return max(0.0, min(100.0, 100.0 - number(left.group(1))))
+    return None
+
+
+def claude_reset_epoch(line, now=None):
+    """把重置文案换算成时间戳：'3:00 PM' 取下一个该时刻，'Mon' 取下一个周一零点，
+    'in 2h 15m' 按相对时长。认不出来返回 None，界面按「重置时间未知」显示。"""
+    if not line:
+        return None
+    parts = line.lower().split("resets")
+    if len(parts) < 2:
+        return None
+    text = parts[1].strip()
+    moment = time.time() if now is None else float(now)
+
+    clock = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", text)
+    if clock:
+        hour = int(clock.group(1)) % 12 + (12 if clock.group(3) == "pm" else 0)
+        local = time.localtime(moment)
+        candidate = time.mktime(
+            (local.tm_year, local.tm_mon, local.tm_mday, hour, int(clock.group(2) or 0), 0, 0, 0, -1)
+        )
+        if candidate <= moment:
+            candidate += 86400
+        return int(candidate)
+
+    span = 0.0
+    matched = False
+    for value, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-z]+)", text):
+        seconds = CLAUDE_UNIT_SECONDS.get(unit[0])
+        if seconds:
+            span += number(value) * seconds
+            matched = True
+    if matched and span > 0:
+        return int(moment + span)
+
+    day = re.search(r"\b(mon|tue|wed|thu|fri|sat|sun)", text)
+    if day:
+        local = time.localtime(moment)
+        delta = (CLAUDE_WEEKDAYS[day.group(1)] - local.tm_wday) % 7 or 7
+        return int(time.mktime(
+            (local.tm_year, local.tm_mon, local.tm_mday + delta, 0, 0, 0, 0, 0, -1)
+        ))
+    return None
+
+
+def claude_usage_windows(text, now=None):
+    windows = []
+    for name, minutes, labels in CLAUDE_WINDOWS:
+        line = None
+        for label in labels:
+            line = claude_line(text, label)
+            if line:
+                break
+        used = claude_percent(line)
+        if used is None:
+            continue
+        windows.append({
+            "id": name,
+            "windowMinutes": minutes,
+            "usedPercent": round(used, 2),
+            "remainingPercent": round(100.0 - used, 2),
+            "resetsAt": claude_reset_epoch(line, now),
+        })
+    return windows
+
+
+def collect_claude() -> dict:
+    binary = claude_binary()
+    if not binary:
+        return fail("未找到 Claude Code CLI，请先安装 claude 命令")
+    try:
+        auth = claude_json(claude_run(binary, ["auth", "status"], 20))
+    except subprocess.TimeoutExpired:
+        return fail("Claude Code: 登录状态查询超时")
+    if not auth.get("loggedIn"):
+        return fail("Claude Code 未登录，请在终端执行 claude /login")
+    try:
+        # --no-session-persistence：否则每次采集都在 ~/.claude/projects 里留下一个空会话。
+        payload = claude_json(claude_run(
+            binary,
+            ["-p", "/usage", "--output-format", "json", "--no-session-persistence"],
+            45,
+        ))
+    except subprocess.TimeoutExpired:
+        return fail("Claude Code: 用量查询超时")
+    if payload.get("is_error"):
+        return fail("Claude Code: /usage 返回错误")
+    windows = claude_usage_windows(strip_ansi(str(payload.get("result") or "")))
+    if not windows:
+        # 走 API key 或中继计费时 /usage 只报本次会话花费，没有订阅额度窗口。
+        return fail("Claude Code 按 API 计费，没有订阅额度窗口")
+    return {
+        "ok": True,
+        "plan": "unknown",
+        "windows": windows,
+        "source": "claude-cli",
+        "updatedAt": int(time.time()),
+    }
+
+
 # ---------------------------------------------------------------- main
 
 # 采集入口与分组。分组与 Swift 侧 Providers 注册表的刷新节奏一一对应：
@@ -775,6 +931,7 @@ COLLECTORS = {
     "codex": collect_codex,
     "workbuddy": collect_workbuddy,
     "qoder": collect_qoder,
+    "claude": collect_claude,
 }
 
 GROUPS = {

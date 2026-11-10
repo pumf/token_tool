@@ -126,7 +126,7 @@ final class UsageStore: ObservableObject {
         mutedUntil = muteEpoch > 0 ? Date(timeIntervalSince1970: muteEpoch) : nil
         for descriptor in Providers.all {
             states[descriptor.id] = ProviderState()
-            menuBarVisibility[descriptor.id] = Self.storedFlag(descriptor.menuBarDefaultsKey)
+            menuBarVisibility[descriptor.id] = UserDefaults.standard.object(forKey: descriptor.menuBarDefaultsKey) as? Bool ?? descriptor.defaultInMenuBar
             reminderVisibility[descriptor.id] = Self.storedFlag(descriptor.reminderDefaultsKey)
         }
         loadCache()

@@ -676,31 +676,40 @@ struct AnalyticsSuite {
             expectEqual(Set(Providers.all.map(\.menuBarDefaultsKey)).count, Providers.all.count)
             expectEqual(Set(Providers.all.map(\.reminderDefaultsKey)).count, Providers.all.count)
         }
-        test("面板展示顺序仍是 Qoder / WorkBuddy / Codex") {
-            expectEqual(Providers.ordered.map(\.id), [.qoder, .workbuddy, .codex])
+        test("面板展示顺序仍是 Qoder / WorkBuddy / Codex / Claude Code") {
+            expectEqual(Providers.ordered.map(\.id), [.qoder, .workbuddy, .codex, .claude])
         }
         test("额度口径归属") {
             expectEqual(Providers.descriptor(.qoder).quotaKind, .credits)
             expectEqual(Providers.descriptor(.workbuddy).quotaKind, .credits)
             expectEqual(Providers.descriptor(.codex).quotaKind, .percentWindow)
-            expectEqual(Providers.all.filter(\.isPercent).map(\.id), [UsageProvider.codex])
+            expectEqual(Providers.descriptor(.claude).quotaKind, .percentWindow)
+            expectEqual(Providers.all.filter(\.isPercent).map(\.id), [.codex, .claude])
         }
         test("既有的 UserDefaults 键名保持不变") {
             expectEqual(Providers.descriptor(.qoder).menuBarDefaultsKey, "menuBar.qoder")
             expectEqual(Providers.descriptor(.workbuddy).menuBarDefaultsKey, "menuBar.workbuddy")
             expectEqual(Providers.descriptor(.codex).menuBarDefaultsKey, "menuBar.codex")
+            expectEqual(Providers.descriptor(.claude).menuBarDefaultsKey, "menuBar.claude")
             expectEqual(Providers.descriptor(.qoder).reminderDefaultsKey, "reminder.qoder.claim")
             expectEqual(Providers.descriptor(.workbuddy).reminderDefaultsKey, "reminder.workbuddy.claim")
             expectEqual(Providers.descriptor(.codex).reminderDefaultsKey, "reminder.codex.reset")
+            expectEqual(Providers.descriptor(.claude).reminderDefaultsKey, "reminder.claude.reset")
+        }
+        test("新接入的 Claude Code 首次不进菜单栏，旧三家保持显示") {
+            expectEqual(Providers.descriptor(.claude).defaultInMenuBar, false)
+            expectEqual(Providers.all.filter(\.defaultInMenuBar).map(\.id), [.qoder, .workbuddy, .codex])
         }
         test("刷新分组沿用旧的两档节奏与采集顺序") {
             let groups = Providers.groups
-            expectEqual(groups.count, 2)
+            expectEqual(groups.count, 3)
             // 60 秒一档里 Codex 的超时预算更大，所以仍然先起 Codex、再起 WorkBuddy。
             expectEqual(groups[0].interval, 60.0)
             expectEqual(groups[0].providers, [.codex, .workbuddy])
             expectEqual(groups[1].interval, 90.0)
             expectEqual(groups[1].providers, [UsageProvider.qoder])
+            expectEqual(groups[2].interval, 120.0)
+            expectEqual(groups[2].providers, [UsageProvider.claude])
             expectEqual(groups.flatMap(\.providers).count, Providers.all.count)
         }
         test("只有采集最慢的 Qoder 在面板展开时补采") {
@@ -725,6 +734,8 @@ struct AnalyticsSuite {
                     expectEqual(grant, "100 额度")
                 case .codex:
                     check(false, "Codex 不该有每日领取提醒")
+                case .claude:
+                    check(false, "Claude Code 不该有每日领取提醒")
                 }
             }
         }
@@ -732,6 +743,7 @@ struct AnalyticsSuite {
             expectEqual(NotificationCategory.forProvider(.qoder), "provider.qoder")
             expectEqual(NotificationCategory.forProvider(.workbuddy), "provider.workbuddy")
             expectEqual(NotificationCategory.forProvider(.codex), "provider.codex")
+            expectEqual(NotificationCategory.forProvider(.claude), "provider.claude")
             expectEqual(NotificationCategory.openAction(for: .codex), "open.codex")
             expectEqual(NotificationCategory.all.count, Providers.ordered.count)
         }

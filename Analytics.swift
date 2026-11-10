@@ -4,6 +4,7 @@ enum UsageProvider: String, Sendable, CaseIterable {
     case qoder
     case workbuddy
     case codex
+    case claude
 
     // 显示名、图标、颜色等静态信息见 Providers.swift 的注册表。
 }

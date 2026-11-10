@@ -5,6 +5,7 @@ enum Theme {
     static let qoder = Color(red: 0.20, green: 0.49, blue: 0.98)
     static let workbuddy = Color(red: 0.10, green: 0.68, blue: 0.42)
     static let codex = Color(red: 0.55, green: 0.36, blue: 0.95)
+    static let claude = Color(red: 0.85, green: 0.47, blue: 0.34)
     static let warning = Color.orange
     static let danger = Color(nsColor: .systemRed)
     static let claim = Color(nsColor: .systemOrange)
@@ -785,7 +786,7 @@ struct MenuContent: View {
                 isOn: $store.simpleMode,
                 iconOn: "rectangle.compress.vertical",
                 iconOff: "rectangle.expand.vertical",
-                help: "简单模式：三个平台只显示主要用量与今日消耗，隐藏预测与更新时间"
+                help: "简单模式：各平台只显示主要用量与今日消耗，隐藏预测与更新时间"
             )
             Button {
                 settingsExpanded.toggle()
@@ -1033,7 +1034,7 @@ struct MenuContent: View {
         return String(notes.prefix(500))
     }
 
-    /// 三家共用一套卡片外壳，内容按额度口径与额度布局分派，新增供应商不需要再加卡片。
+    /// 各家共用一套卡片外壳，内容按额度口径与额度布局分派，新增供应商不需要再加卡片。
     @ViewBuilder
     private var providerCards: some View {
         ForEach(Providers.ordered, id: \.id) { descriptor in
@@ -1565,7 +1566,7 @@ struct MenuContent: View {
                 isOn: $store.simpleMode,
                 iconOn: "rectangle.compress.vertical",
                 iconOff: "rectangle.expand.vertical",
-                help: "三个平台只显示主要用量与今日消耗，隐藏预测与更新时间"
+                help: "各平台只显示主要用量与今日消耗，隐藏预测与更新时间"
             )
         }
         settingRow("快捷键") {
