@@ -12,7 +12,7 @@ mkdir -p build
 swiftc -Onone -parse-as-library \
     -target "${ARCH}-apple-macos12.0" \
     -framework SwiftUI -framework AppKit -framework Combine -framework UserNotifications \
-    Analytics.swift Providers.swift Persistence.swift Diagnostics.swift Views.swift Export.swift Update.swift \
+    Analytics.swift Providers.swift Persistence.swift Diagnostics.swift Models.swift CollectorRunner.swift UsageStore.swift Views.swift Export.swift Update.swift \
     Tests/AnalyticsTests.swift \
     -o build/TokenToolTests
 
