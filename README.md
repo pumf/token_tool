@@ -209,11 +209,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.6.5-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.6.5-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.6.5.dmg`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.6.5/TokenTool-1.6.5.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.6.5/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.0/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
