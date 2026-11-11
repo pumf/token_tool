@@ -1111,7 +1111,9 @@ struct MenuContent: View {
     /// 顺序来自 store.cardOrder（拖动过的话会记住），极简模式换成行式列表。
     @ViewBuilder
     private var providerCards: some View {
-        if store.minimalMode {
+        if store.panelProviders.isEmpty {
+            hiddenCardsPlaceholder
+        } else if store.minimalMode {
             minimalRows
         } else {
             ForEach(store.panelProviders, id: \.id) { descriptor in
@@ -1120,12 +1122,41 @@ struct MenuContent: View {
         }
     }
 
+    /// 一张都不留的时候面板不能空着，给一个一次全部恢复的入口。
+    private var hiddenCardsPlaceholder: some View {
+        HStack(spacing: Token.spaceRow) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("全部卡片都已隐藏")
+                    .font(Token.title)
+                Text("在「设置 → 界面 → 卡片」逐家打开")
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: Token.spaceRow)
+            Button("全部显示") { store.showAllCards() }
+                .controlSize(.small)
+        }
+        .padding(Token.spaceCard)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill(Token.cardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
+        )
+    }
+
     private func reorderableCard(_ descriptor: ProviderDescriptor) -> some View {
         providerCard(descriptor.id)
             .onDrop(of: [.text], isTargeted: nil) { providers, _ in
                 acceptCardDrop(providers, onto: descriptor.id)
             }
-            .contextMenu { cardOrderMenu(descriptor) }
+            .contextMenu { cardMenu(descriptor) }
     }
 
     /// 拖拽载荷只带供应商 id；异步取回时顺序可能已经变过，落点按取回那一刻的槽位算。
@@ -1140,56 +1171,132 @@ struct MenuContent: View {
 
     /// 菜单栏面板里拖动可能被系统弹窗抢走焦点，所以再给一组菜单项兜底。
     @ViewBuilder
-    private func cardOrderMenu(_ descriptor: ProviderDescriptor) -> some View {
+    private func cardMenu(_ descriptor: ProviderDescriptor) -> some View {
         Button("上移") { store.shiftCard(descriptor.id, by: -1) }
         Button("下移") { store.shiftCard(descriptor.id, by: 1) }
         Button("置顶") { store.shiftCard(descriptor.id, by: -store.cardOrder.count) }
         Divider()
+        Button("隐藏此卡片", systemImage: "eye.slash") {
+            store.setCardVisible(descriptor.id, false)
+        }
         Button("恢复默认顺序") { store.resetCardOrder() }
     }
 
     private var minimalRows: some View {
-        VStack(spacing: Token.spaceTight - 2) {
-            ForEach(store.panelProviders, id: \.id) { descriptor in
+        VStack(spacing: 0) {
+            ForEach(Array(store.panelProviders.enumerated()), id: \.element.id) { offset, descriptor in
+                if offset > 0 {
+                    Rectangle()
+                        .fill(Token.cardStroke.opacity(0.6))
+                        .frame(height: Token.hairline)
+                        .padding(.leading, 18)
+                }
                 minimalRow(descriptor)
                     .onDrag { NSItemProvider(object: descriptor.id.rawValue as NSString) }
                     .onDrop(of: [.text], isTargeted: nil) { providers, _ in
                         acceptCardDrop(providers, onto: descriptor.id)
                     }
-                    .contextMenu { cardOrderMenu(descriptor) }
+                    .contextMenu { cardMenu(descriptor) }
             }
+            minimalFooter
         }
+        .padding(.vertical, Token.spaceRow - 2)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill(Token.cardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
+        )
     }
 
-    /// 极简模式一家一行：色点、名称、数值、口径。明细、预测与更新时间都不占高度。
+    /// 极简模式一家一行：色条导轨、名称、数值、剩余量、口径，明细与预测都不占高度。
     private func minimalRow(_ descriptor: ProviderDescriptor) -> some View {
         let provider = descriptor.id
-        return HStack(spacing: Token.spaceTight) {
-            Circle()
+        return HStack(spacing: Token.spaceTight - 1) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(descriptor.color)
-                .frame(width: 6, height: 6)
+                .frame(width: 3, height: 15)
             Text(descriptor.displayName)
                 .font(Token.label)
-                .frame(width: 78, alignment: .leading)
+                .frame(width: 76, alignment: .leading)
                 .lineLimit(1)
-            Spacer(minLength: Token.spaceTight)
+            Spacer(minLength: 2)
             Text(cardValue(provider))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(store.error(for: provider) != nil ? Theme.warning : Color.primary)
+                .lineLimit(1)
+            minimalGauge(provider, descriptor)
             Text(minimalCaption(provider))
                 .font(Token.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 54, alignment: .trailing)
+                .frame(width: 48, alignment: .trailing)
                 .lineLimit(1)
         }
-        .frame(height: 22)
-        .padding(.horizontal, Token.spaceTight + 2)
-        .background(
-            RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
-                .fill(Token.insetFill)
-        )
+        .frame(height: 30)
+        .padding(.horizontal, Token.spaceRow)
+        .contentShape(Rectangle())
         .help("\(descriptor.displayName) · \(minimalCaption(provider)) · \(cardFooter(provider))")
+    }
+
+    /// 有分母的一家画剩余量胶囊；只有余额的一家（Trae）没有分母，改画近 7 天迷你趋势。
+    @ViewBuilder
+    private func minimalGauge(_ provider: UsageProvider, _ descriptor: ProviderDescriptor) -> some View {
+        if descriptor.creditLayout == .balanceOnly {
+            Sparkline(values: minimalTrend(provider), tint: descriptor.color, days: 7)
+                .frame(width: 60, height: 12)
+        } else {
+            ZStack(alignment: .leading) {
+                Capsule().fill(descriptor.color.opacity(0.13))
+                Capsule()
+                    .fill(descriptor.color)
+                    .frame(width: max(3, 60 * minimalFraction(provider)))
+            }
+            .frame(width: 60, height: 6)
+            .animation(.easeOut(duration: 0.25), value: minimalFraction(provider))
+        }
+    }
+
+    private func minimalFraction(_ provider: UsageProvider) -> CGFloat {
+        guard let result = store.result(for: provider), result.ok == true else { return 0 }
+        let percent: Double?
+        switch provider.quotaKind {
+        case .credits: percent = result.remainingPercent
+        case .percentWindow: percent = result.primaryWindow?.remainingPercent
+        }
+        return CGFloat(min(max((percent ?? 0) / 100, 0), 1))
+    }
+
+    /// 迷你趋势与常规卡片的曲线同源：取预测给出的近 7 天序列，取不到就留灰线，不画一条没有依据的折线。
+    private func minimalTrend(_ provider: UsageProvider) -> [Double] {
+        store.forecast(for: provider)?.values ?? []
+    }
+
+    /// 页脚交代数据新鲜度和「还有几家被藏起来了」，免得数字少了一屏却找不到原因。
+    private var minimalFooter: some View {
+        HStack(spacing: Token.spaceTight) {
+            Text("更新于 \(Format.time(minimalLatestUpdate))")
+            Spacer(minLength: Token.spaceTight)
+            Text(minimalCountText)
+        }
+        .font(Token.caption)
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, Token.spaceRow + 3)
+        .padding(.top, Token.spaceTight - 1)
+    }
+
+    private var minimalLatestUpdate: Date? {
+        store.panelProviders.compactMap { descriptor in
+            store.result(for: descriptor.id)?.updatedDate ?? store.lastCollectedAt(for: descriptor.id)
+        }.max()
+    }
+
+    private var minimalCountText: String {
+        let visible = store.panelProviders.count
+        guard store.hiddenCount > 0 else { return "\(visible) 张卡片" }
+        return "\(visible) 张 · 已隐藏 \(store.hiddenCount)"
     }
 
     /// 右侧口径：积分制给剩余比例，窗口制给窗口长度，只有余额的一家给单位。
@@ -1758,6 +1865,18 @@ struct MenuContent: View {
                 densityChip(density)
             }
         }
+        // 隐藏只摘面板卡片，采集、历史、菜单栏、提醒都不受影响，所以这里给全量列表。
+        settingWideRow("卡片") {
+            ForEach(store.orderedProviders, id: \.id) { descriptor in
+                settingChip(
+                    descriptor.displayName,
+                    isOn: store.cardVisibilityBinding(for: descriptor.id),
+                    iconOn: "eye.fill",
+                    iconOff: "eye.slash",
+                    help: "在面板显示 \(descriptor.displayName) 卡片；隐藏后仍照常采集、提醒，也仍可进菜单栏"
+                )
+            }
+        }
         settingRow("快捷键") {
             settingChip(
                 "⌥⇧T 面板",
@@ -1777,7 +1896,7 @@ struct MenuContent: View {
             }
         }
         settingWideRow("菜单栏") {
-            ForEach(store.panelProviders, id: \.id) { descriptor in
+            ForEach(store.orderedProviders, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
                     isOn: store.menuBarBinding(for: descriptor.id),
@@ -1828,7 +1947,7 @@ struct MenuContent: View {
 
     private var reminderSettings: some View {
         settingWideRow("提醒") {
-            ForEach(store.panelProviders, id: \.id) { descriptor in
+            ForEach(store.orderedProviders, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
                     isOn: store.reminderBinding(for: descriptor.id),

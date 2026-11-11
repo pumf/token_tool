@@ -280,4 +280,16 @@ extension Providers {
         result.insert(provider, at: to)
         return result
     }
+
+    // MARK: 卡片显示/隐藏（纯函数，方便测试）
+
+    /// 隐藏名单里可能留着下架或改名前的供应商 id，过滤掉再入库。
+    static func hidden(stored: [String]) -> Set<UsageProvider> {
+        Set(stored.compactMap(UsageProvider.init(rawValue:)))
+    }
+
+    /// 隐藏只从面板里摘掉这一张，顺序本身不动，重新显示时回到原来的槽位。
+    static func visible(_ order: [UsageProvider], hidden: Set<UsageProvider>) -> [UsageProvider] {
+        order.filter { !hidden.contains($0) }
+    }
 }

@@ -79,8 +79,19 @@ final class UsageStore: ObservableObject {
     @Published var cardOrder: [UsageProvider] {
         didSet { UserDefaults.standard.set(cardOrder.map(\.rawValue), forKey: "ui.card.order") }
     }
-    /// 面板、本周汇总、菜单栏文字都走同一套顺序，新接入的一家永远排在末尾。
-    var panelProviders: [ProviderDescriptor] { cardOrder.map { $0.descriptor } }
+    /// 隐藏起来的卡片写入 ui.card.hidden：只是面板不占高度，采集、历史、菜单栏、提醒照常。
+    @Published var hiddenCards: Set<UsageProvider> {
+        didSet {
+            UserDefaults.standard.set(hiddenCards.map(\.rawValue).sorted(), forKey: "ui.card.hidden")
+        }
+    }
+    /// 完整顺序，含被隐藏的卡片：菜单栏文字、悬浮提示、设置页的开关都用它。
+    var orderedProviders: [ProviderDescriptor] { cardOrder.map { $0.descriptor } }
+    /// 面板、本周汇总只画没被隐藏的那几张，新接入的一家永远排在末尾。
+    var panelProviders: [ProviderDescriptor] {
+        Providers.visible(cardOrder, hidden: hiddenCards).map { $0.descriptor }
+    }
+    var hiddenCount: Int { hiddenCards.count }
     @Published var menuBarStyle: MenuBarStyle {
         didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: "menuBar.style") }
     }
@@ -133,6 +144,10 @@ final class UsageStore: ObservableObject {
         Providers.order(stored: UserDefaults.standard.stringArray(forKey: "ui.card.order") ?? [])
     }
 
+    private static func storedHiddenCards() -> Set<UsageProvider> {
+        Providers.hidden(stored: UserDefaults.standard.stringArray(forKey: "ui.card.hidden") ?? [])
+    }
+
     /// 注册表里的刷新节奏分组，间隔小的排在前面。
     private static let groups = Providers.groups
 
@@ -146,6 +161,7 @@ final class UsageStore: ObservableObject {
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
         density = Self.storedDensity()
         cardOrder = Self.storedCardOrder()
+        hiddenCards = Self.storedHiddenCards()
         menuBarStyle = MenuBarStyle(rawValue: UserDefaults.standard.string(forKey: "menuBar.style") ?? "") ?? .classic
         hotKeyEnabled = Self.storedFlag("hotkey.enabled")
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
@@ -228,6 +244,23 @@ final class UsageStore: ObservableObject {
 
     func resetCardOrder() {
         cardOrder = Providers.all.map(\.id)
+    }
+
+    func setCardVisible(_ provider: UsageProvider, _ visible: Bool) {
+        if visible {
+            hiddenCards.remove(provider)
+        } else {
+            hiddenCards.insert(provider)
+        }
+    }
+
+    func showAllCards() { hiddenCards = [] }
+
+    func cardVisibilityBinding(for provider: UsageProvider) -> Binding<Bool> {
+        Binding(
+            get: { !self.hiddenCards.contains(provider) },
+            set: { self.setCardVisible(provider, $0) }
+        )
     }
 
     /// 页脚的采集时间戳：节奏最快的一组沿用的是「刷新」这个叫法，其余按组内供应商名。
@@ -1274,7 +1307,7 @@ final class UsageStore: ObservableObject {
 
 extension UsageStore {
     var menuBarMetrics: [MenuBarMetric] {
-        panelProviders.compactMap { menuBarMetric(for: $0) }
+        orderedProviders.compactMap { menuBarMetric(for: $0) }
     }
 
     private func menuBarMetric(for descriptor: ProviderDescriptor) -> MenuBarMetric? {
@@ -1337,7 +1370,7 @@ extension UsageStore {
         if !isAttentionMuted, let item = attentionItems.first {
             parts.append(item.kind == .warning ? "需要关注：\(item.title)" : "待处理：\(item.title)")
         }
-        parts.append(contentsOf: panelProviders.map { tooltipLine(for: $0) })
+        parts.append(contentsOf: orderedProviders.map { tooltipLine(for: $0) })
         return parts.joined(separator: " · ")
     }
 

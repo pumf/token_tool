@@ -812,6 +812,24 @@ struct AnalyticsSuite {
                 check(!density.help.isEmpty, "密度 \(density.title) 缺少说明")
             }
         }
+        test("隐藏名单只认注册表里的供应商") {
+            expectEqual(Providers.hidden(stored: ["trae", "removed"]), [.trae])
+            expectEqual(Providers.hidden(stored: []).count, 0)
+        }
+        test("隐藏是从面板摘掉，顺序本身不动") {
+            expectEqual(Providers.visible(base, hidden: [.qoder, .codex]), [.workbuddy, .claude, .trae])
+            expectEqual(Providers.visible(base, hidden: Set(base)).count, 0)
+        }
+        test("重新显示回到原来的槽位") {
+            var hidden = Providers.hidden(stored: ["codex"])
+            expectEqual(Providers.visible(base, hidden: hidden), [.qoder, .workbuddy, .claude, .trae])
+            hidden.remove(.codex)
+            expectEqual(Providers.visible(base, hidden: hidden), base)
+        }
+        test("拖动过的顺序不受隐藏影响") {
+            let dragged = Providers.moved(base, .trae, onto: .qoder)
+            expectEqual(Providers.visible(dragged, hidden: [.claude]), [.trae, .qoder, .workbuddy, .codex])
+        }
     }
 
     // MARK: 本地数据格式
