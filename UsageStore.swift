@@ -53,8 +53,12 @@ final class UsageStore: ObservableObject {
     /// 额度制平台的月度预算（额度），本月消耗超过它时告警；0 表示关闭。
     @Published var monthlyBudget: Int {
         didSet {
-            monthlyBudget = max(0, monthlyBudget)
-            UserDefaults.standard.set(monthlyBudget, forKey: "alert.budget.monthly")
+            // 不能再无条件写回 monthlyBudget：didSet 里改自己是无限递归，会把栈跑爆直接崩溃。
+            let clamped = max(0, monthlyBudget)
+            if clamped != monthlyBudget {
+                monthlyBudget = clamped
+            }
+            UserDefaults.standard.set(clamped, forKey: "alert.budget.monthly")
             recomputeAttention(now: Date())
         }
     }
