@@ -8,7 +8,9 @@ claude_*），真机通道一旦改动这些函数就会先错，所以这里用
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -190,11 +192,141 @@ def test_claude_api_billed():
 
 
 def test_claude_registry():
-    expect_equal(sorted(collector.COLLECTORS), ["claude", "codex", "qoder", "workbuddy"], "采集器注册表四家")
+    expect_equal(
+        sorted(collector.COLLECTORS),
+        ["claude", "codex", "qoder", "trae", "workbuddy"],
+        "采集器注册表五家",
+    )
     expect_equal(collector.GROUPS["fast"], ("codex", "workbuddy"), "fast 分组仍是本地 IPC 两家")
     check("claude" not in collector.GROUPS, "Claude 单独一档，不进 fast 分组")
+    check("trae" not in collector.GROUPS, "Trae 单独一档，不进 fast 分组")
     expect_equal(collector.CLAUDE_WINDOWS[0][1], 300, "会话窗口分钟数与 Swift 侧一致")
     expect_equal(collector.CLAUDE_WINDOWS[1][1], 10080, "周窗口分钟数与 Swift 侧一致")
+
+
+# ---------------------------------------------------------------- Trae 日志
+
+
+def trae_line(remaining, stamp="2026-11-11T14:48:42.529+08:00", level="info"):
+    return (
+        f"{stamp} [{level}] [ICubeUsageService] credits mutation refresh completed "
+        f'{{"generation":1,"remaining":{remaining}}}\n'
+    )
+
+
+def write_trae_log(root, session, window, content, mtime=None):
+    path = Path(root) / session / window / "renderer.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_trae_credit_line():
+    epoch = collector.trae_stamp_epoch("2026-11-11T14:48:42.529+08:00")
+    expect_equal(
+        collector.trae_latest_credit("噪音行\n" + trae_line(1200)),
+        (epoch, 1200.0),
+        "积分行读出余额与时刻",
+    )
+    text = trae_line(1200) + trae_line(1180, stamp="2026-11-11T15:02:07.001+08:00")
+    latest = collector.trae_latest_credit(text)
+    expect_equal(latest[1], 1180.0, "多条积分行取最后一条")
+    check(latest[0] > epoch, "最后一条的时刻更新")
+    expect_equal(
+        collector.trae_latest_credit(trae_line(1200, level="warning")),
+        (epoch, 1200.0),
+        "日志级别变化不影响解析",
+    )
+    expect_equal(collector.trae_latest_credit("[info] 没有积分记录\n"), None, "无积分行返回空")
+    expect_equal(
+        collector.trae_latest_credit("credits mutation refresh completed {\"remaining\":1200}"),
+        None,
+        "缺时间戳的行不认，避免造出假时刻",
+    )
+    expect_equal(
+        collector.trae_latest_credit(trae_line(1200, stamp="2026-13-45T99:99:99+08:00"))[1],
+        1200.0,
+        "时间戳非法时余额仍能读出",
+    )
+    check(collector.trae_stamp_epoch("2026-13-45T99:99:99+08:00") is None, "非法时间戳换算为空")
+
+
+def test_trae_log_files():
+    with tempfile.TemporaryDirectory() as root:
+        newer = write_trae_log(root, "20261111T150000", "window4", "x\n", mtime=2000)
+        older = write_trae_log(root, "20261111T144722", "window1", "x\n", mtime=1000)
+        stray = Path(root) / "20261111T144722" / "window1" / "other.log"
+        stray.write_text("x\n", encoding="utf-8")
+        expect_equal(
+            collector.trae_log_files(root),
+            [newer, older],
+            "候选日志按修改时间从新到旧，且只认 renderer.log",
+        )
+        expect_equal(collector.trae_log_files(Path(root) / "不存在"), [], "日志目录缺失时返回空")
+
+
+def test_trae_scan_file():
+    with tempfile.TemporaryDirectory() as root:
+        # 积分行在开头、后面塞满 2MB 以上的噪音，尾部窗口读不到，只能靠整扫兜底。
+        path = write_trae_log(root, "s", "window1", trae_line(1200))
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write("[info] filler\n" * 400000)
+        check(
+            path.stat().st_size > collector.TRAE_LOG_TAIL_BYTES,
+            "夹具确实比尾部窗口大",
+        )
+        expect_equal(
+            collector.trae_scan_file(path)[1],
+            1200.0,
+            "尾部读不到时整扫兜底",
+        )
+        expect_equal(collector.trae_scan_file(path.parent / "missing.log"), None, "文件缺失不抛异常")
+
+
+def test_collect_trae():
+    original = collector.TRAE_LOG_ROOT
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            collector.TRAE_LOG_ROOT = Path(root)
+            expect_equal(collector.collect_trae()["ok"], False, "没有日志目录时失败")
+            check("Trae" in collector.collect_trae()["error"], "失败原因是中文提示")
+
+            write_trae_log(root, "s", "window1", "[info] 还没有积分记录\n")
+            result = collector.collect_trae()
+            expect_equal(result["ok"], False, "日志里没有积分行时失败")
+            check("额度面板" in result["error"], "提示用户去客户端打开一次面板")
+
+            # 同一条积分行既出现在 window1 也出现在更新的 window4，取更新那份的值。
+            write_trae_log(
+                root, "s", "window1", trae_line(1200), mtime=1000
+            )
+            write_trae_log(
+                root, "s", "window4", trae_line(1180, stamp="2026-11-11T15:02:07.001+08:00"), mtime=2000
+            )
+            result = collector.collect_trae()
+            expect_equal(result["ok"], True, "读到积分余额")
+            expect_equal(result["remaining"], 1180.0, "余额取最新日志")
+            expect_equal(result["unit"], "credits", "口径是积分")
+            expect_equal(result["source"], "trae-log", "来源标注为客户端日志")
+            expect_equal(
+                result["updatedAt"],
+                collector.trae_stamp_epoch("2026-11-11T15:02:07.001+08:00"),
+                "时间戳用日志时刻而不是采集时刻",
+            )
+            check("total" not in result, "Trae 没有总额度，不能凭空造 total")
+
+            # 最新一份日志里余额是负数（脏数据），退回上一份有效记录而不是直接失败。
+            write_trae_log(root, "s2", "window9", trae_line(-1), mtime=3000)
+            expect_equal(collector.collect_trae()["remaining"], 1180.0, "脏数据退回上一份有效记录")
+
+        with tempfile.TemporaryDirectory() as root:
+            collector.TRAE_LOG_ROOT = Path(root)
+            write_trae_log(root, "s", "window1", trae_line(-1))
+            expect_equal(collector.collect_trae()["ok"], False, "只有负数余额时不采信")
+    finally:
+        collector.TRAE_LOG_ROOT = original
 
 
 def main():

@@ -23,6 +23,8 @@ enum CreditLayout: Sendable {
     case planBreakdown
     /// 单一资源包进度条，附资源包数量。
     case resourcePackage
+    /// 只有余额、查不到总额度的一家：画不出进度条，显示余额与数据时刻。
+    case balanceOnly
 }
 
 /// 登录/安装类引导动作。实现仍是显式分支，但集中在一处，不再散落到界面代码。
@@ -169,6 +171,32 @@ enum Providers {
             claimReminder: .windowReset,
             reminderDefaultsKey: "reminder.claude.reset",
             menuBarDefaultsKey: "menuBar.claude",
+            refreshOnPanelOpen: false,
+            setup: .none,
+            defaultInMenuBar: false
+        ),
+        ProviderDescriptor(
+            id: .trae,
+            collectorKey: "trae",
+            displayName: "Trae",
+            subtitle: "客户端日志 · 积分余额",
+            icon: "t.square.fill",
+            menuBarLetter: "T",
+            color: Theme.trae,
+            quotaKind: .credits,
+            creditUnit: "积分",
+            creditLayout: .balanceOnly,
+            refreshInterval: 120,
+            collectorTimeout: 20,
+            clientName: "Trae CN",
+            clientBundleID: "cn.trae.app",
+            clientAppPath: "/Applications/Trae CN.app",
+            clientHelp: "打开 Trae CN",
+            websiteURL: "https://www.trae.cn",
+            websiteHelp: "打开 Trae 官网",
+            claimReminder: .daily(hour: 0, grant: "100 积分", body: "打开 Trae 领取今日积分。"),
+            reminderDefaultsKey: "reminder.trae.claim",
+            menuBarDefaultsKey: "menuBar.trae",
             refreshOnPanelOpen: false,
             setup: .none,
             defaultInMenuBar: false

@@ -6,6 +6,7 @@ enum Theme {
     static let workbuddy = Color(red: 0.10, green: 0.68, blue: 0.42)
     static let codex = Color(red: 0.55, green: 0.36, blue: 0.95)
     static let claude = Color(red: 0.85, green: 0.47, blue: 0.34)
+    static let trae = Color(red: 0.00, green: 0.70, blue: 0.95)
     static let warning = Color.orange
     static let danger = Color(nsColor: .systemRed)
     static let claim = Color(nsColor: .systemOrange)
@@ -1094,8 +1095,10 @@ struct MenuContent: View {
         let fraction: Double = {
             guard let value = weekly.thisWeek else { return 0 }
             if weekly.isPercent { return min(1, value / 100) }
-            guard let total, total > 0 else { return 0 }
-            return min(1, value / total)
+            if let total, total > 0 { return min(1, value / total) }
+            // 只有余额的一家（Trae）没有总量可除，按本周/上周较大值折算，只表达趋势。
+            let scale = max(value, weekly.lastWeek ?? 0)
+            return scale > 0 ? min(1, value / scale) : 0
         }()
         return HStack(spacing: 8) {
             Circle()
@@ -1115,19 +1118,22 @@ struct MenuContent: View {
             }
             .frame(height: 3)
             VStack(alignment: .trailing, spacing: 1) {
-                Text(weeklyValueText(weekly.thisWeek, isPercent: weekly.isPercent))
+                Text(weeklyValueText(weekly.thisWeek, isPercent: weekly.isPercent, unit: descriptor.creditUnit))
                     .font(Token.body)
-                Text(weekly.lastWeek.map { "上周 \(weeklyValueText($0, isPercent: weekly.isPercent))" } ?? "上周 —")
+                Text(weekly.lastWeek.map { "上周 \(weeklyValueText($0, isPercent: weekly.isPercent, unit: descriptor.creditUnit))" } ?? "上周 —")
                     .font(Token.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(width: 96, alignment: .trailing)
         }
+        .help(total != nil || weekly.isPercent
+                  ? ""
+                  : "\(descriptor.displayName) 查不到总额度，进度条按本周/上周较大值折算，只表示趋势。")
     }
 
-    private func weeklyValueText(_ value: Double?, isPercent: Bool) -> String {
+    private func weeklyValueText(_ value: Double?, isPercent: Bool, unit: String) -> String {
         guard let value else { return "--" }
-        return isPercent ? Format.percentDetailed(value) : "\(Format.credits(value)) 额度"
+        return isPercent ? Format.percentDetailed(value) : "\(Format.credits(value)) \(unit)"
     }
 
     private func providerCard(_ provider: UsageProvider) -> some View {
@@ -1165,6 +1171,10 @@ struct MenuContent: View {
         guard let result = store.result(for: provider), result.ok == true else { return "等待采集" }
         switch provider.quotaKind {
         case .credits:
+            if provider.descriptor.creditLayout == .balanceOnly {
+                // 这一家只有余额、没有周期总额度，不能谎报成「等待采集」。
+                return "\(provider.descriptor.creditUnit)余额"
+            }
             guard let total = result.total, total > 0 else { return "等待采集" }
             return "剩余 / 共 \(Format.credits(total)) \(provider.descriptor.creditUnit)"
         case .percentWindow:
@@ -1296,6 +1306,19 @@ struct MenuContent: View {
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
+            case .balanceOnly:
+                if result.remaining != nil {
+                    // 客户端只在积分变动时往日志里写一行，所以要说清数据可能滞后。
+                    Text("余额取自 \(descriptor.clientName) 客户端日志，仅在积分变动时更新，可能滞后于客户端面板")
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                    insightRow(provider)
+                    forecastRow(provider, tint: descriptor.color)
+                } else {
+                    Text("日志里还没有积分记录，请在 \(descriptor.clientName) 里打开一次额度面板")
+                        .font(Token.meta)
+                        .foregroundStyle(.secondary)
+                }
             }
         } else {
             emptyContent
@@ -1345,6 +1368,10 @@ struct MenuContent: View {
                         .font(Token.meta)
                         .foregroundStyle(.secondary)
                 }
+            case .balanceOnly:
+                Text(result.remaining != nil ? "余额取自客户端日志" : "日志里还没有积分记录")
+                    .font(Token.caption)
+                    .foregroundStyle(.secondary)
             }
         } else {
             emptyContent
@@ -1514,7 +1541,7 @@ struct MenuContent: View {
             HStack(spacing: 5) {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.system(size: 10, weight: .semibold))
-                Text(insightText(insight))
+                Text(insightText(insight, unit: provider.descriptor.creditUnit))
                     .font(Token.meta)
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -1524,21 +1551,21 @@ struct MenuContent: View {
         }
     }
 
-    private func insightText(_ insight: UsageInsight) -> String {
+    private func insightText(_ insight: UsageInsight, unit: String) -> String {
         let today = insight.todayConsumed.map {
-            "今日消耗 \(insightValue($0, percent: insight.isPercent))"
+            "今日消耗 \(insightValue($0, percent: insight.isPercent, unit: unit))"
         } ?? "今日消耗 --"
         let average = insight.dailyAverage.map {
-            "近7日日均 \(insightValue($0, percent: insight.isPercent))/天"
+            "近7日日均 \(insightValue($0, percent: insight.isPercent, unit: unit))/天"
         } ?? "近7日日均 --"
         return "\(today) · \(average)"
     }
 
-    private func insightValue(_ value: Double, percent: Bool) -> String {
+    private func insightValue(_ value: Double, percent: Bool, unit: String) -> String {
         if percent {
             return Format.percentDetailed(value)
         }
-        return "\(Format.credits(value)) 额度"
+        return "\(Format.credits(value)) \(unit)"
     }
 
     private var emptyContent: some View {
@@ -1628,9 +1655,14 @@ struct MenuContent: View {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            HStack(spacing: Token.spaceTight) {
+            // 五家一排会顶出 382 的面板宽度，整块面板被居中挤到左边、两侧一起裁掉；
+            // 自适应网格放不下就换行，宽度永远不超过面板。
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 88, maximum: 176), spacing: Token.spaceTight)],
+                alignment: .leading,
+                spacing: Token.spaceTight
+            ) {
                 chips()
-                Spacer(minLength: 0)
             }
         }
     }

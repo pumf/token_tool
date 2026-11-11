@@ -5,6 +5,7 @@ enum UsageProvider: String, Sendable, CaseIterable {
     case workbuddy
     case codex
     case claude
+    case trae
 
     // 显示名、图标、颜色等静态信息见 Providers.swift 的注册表。
 }
@@ -482,6 +483,7 @@ enum UsageAnalytics {
     ) -> UsageForecast? {
         let nowTs = now.timeIntervalSince1970
         let chartStart = nowTs - TimeInterval(chartDays) * day
+        let unit = provider.descriptor.creditUnit
         let chartPoints = samples.compactMap { sample -> (at: Double, value: Double)? in
             guard Double(sample.at) >= chartStart,
                   let remaining = sample.remaining,
@@ -489,9 +491,12 @@ enum UsageAnalytics {
             return (Double(sample.at), remaining)
         }
         guard !chartPoints.isEmpty,
-              let current = currentPercent(provider: provider, input: input),
               let currentCredits = currentCredits(input: input),
               let insight = insight(provider: provider, input: input, samples: samples, now: now) else { return nil }
+        // 只有余额、查不到总额度的一家（Trae）算不出百分比：按「不低」处理，
+        // 让耗尽预测照常按余额/日均给出，而不是整行消失。
+        let current = currentPercent(provider: provider, input: input)
+        let isLow = (current ?? 100) <= lowThreshold
 
         let values = downsample(chartPoints.sorted { $0.at < $1.at }.map(\.value))
         guard let dailyAverage = insight.dailyAverage else {
@@ -522,13 +527,13 @@ enum UsageAnalytics {
         let reclaimed = max(0, (dailyAverage - netDaily) * Double(insight.observedDays))
         let sampleNote = insight.observedDays < 3 ? "样本较少，建议多观察几天。" : ""
         if netDaily <= 0.5 {
-            var help = "按已观察 \(insight.observedDays) 天统计：日均消耗约 \(creditText(dailyAverage)) 额度，领取/重置增加约 \(creditText(reclaimed)) 额度，净消耗已不大于 0，暂无耗尽估算。"
+            var help = "按已观察 \(insight.observedDays) 天统计：日均消耗约 \(creditText(dailyAverage)) \(unit)，领取/重置增加约 \(creditText(reclaimed)) \(unit)，净消耗已不大于 0，暂无耗尽估算。"
             help += sampleNote
             return UsageForecast(
                 values: values,
                 text: "按当前节奏不会耗尽",
                 help: help,
-                warning: current <= lowThreshold,
+                warning: isLow,
                 remainingPercent: current,
                 ratePerHour: 0,
                 windows: []
@@ -537,10 +542,10 @@ enum UsageAnalytics {
 
         let hours = currentCredits / netDaily * 24
         let exhaustAt = now.addingTimeInterval(hours * 3600)
-        let warning = current <= lowThreshold || hours <= 2
-        var help = "按已观察 \(insight.observedDays) 天的净消耗约 \(creditText(netDaily)) 额度/天 估算"
+        let warning = isLow || hours <= 2
+        var help = "按已观察 \(insight.observedDays) 天的净消耗约 \(creditText(netDaily)) \(unit)/天 估算"
         if reclaimed > 0.5 {
-            help += "（已扣除领取/重置增加约 \(creditText(reclaimed)) 额度）"
+            help += "（已扣除领取/重置增加约 \(creditText(reclaimed)) \(unit)）"
         } else {
             help += "（未记录到领取/重置增加）"
         }

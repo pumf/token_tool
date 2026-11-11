@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 HOME = Path.home()
@@ -922,6 +923,106 @@ def collect_claude() -> dict:
     }
 
 
+# ---------------------------------------------------------------- Trae
+
+# Trae 个人版没有免凭据的用量接口：本机 17788 端口是登录用的 OAuth 回调服务，
+# 官方 traecli 也没有 usage 子命令。唯一可读的来源是客户端自己在 renderer 日志里
+# 写的一行 `credits mutation refresh completed {"generation":1,"remaining":1200}`。
+# 因此这里只匹配这一行、只取数字；同一文件里的其他内容一概不读，也不带进错误信息。
+TRAE_LOG_ROOT = APP_SUPPORT.parent / "Trae CN" / "logs"
+TRAE_CREDIT_RE = re.compile(
+    r"(?P<stamp>\d{4}-\d{2}-\d{2}T[\d:.]+\+[\d:]{2,5})\s+\[[a-z]+\]"
+    r"[^\n]*?credits mutation refresh completed\s+"
+    r"\{[^{}]*?\"remaining\"\s*:\s*(?P<remaining>-?[\d.]+)"
+)
+TRAE_LOG_TAIL_BYTES = 2 * 1024 * 1024
+TRAE_LOG_FILES_LIMIT = 6
+
+
+def trae_stamp_epoch(stamp):
+    """日志行首的 ISO-8601 时间戳换算成 epoch；认不出来返回 None，由调用方退回采集时刻。"""
+    try:
+        return int(datetime.fromisoformat(stamp).timestamp())
+    except ValueError:
+        return None
+
+
+def trae_log_files(root=None):
+    """候选日志按修改时间从新到旧；只认 window*/renderer.log，不翻整个目录树。"""
+    base = Path(root) if root else TRAE_LOG_ROOT
+    try:
+        files = [path for path in base.glob("*/window*/renderer.log") if path.is_file()]
+    except OSError:
+        return []
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def trae_latest_credit(text):
+    """取一段日志文本里最后一条积分记录，返回 (epoch, remaining)；没有则 None。"""
+    matches = list(TRAE_CREDIT_RE.finditer(text))
+    if not matches:
+        return None
+    return trae_credit_from_match(matches[-1])
+
+
+def trae_credit_from_match(match):
+    return trae_stamp_epoch(match.group("stamp")), number(match.group("remaining"))
+
+
+def trae_read_tail(path):
+    """只读文件末尾，日志可能上百 MB，不能整份读进来。"""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(size - TRAE_LOG_TAIL_BYTES, 0))
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def trae_scan_file(path):
+    """先扫末尾（积分变动通常就在最近）；尾部没有再逐行整扫一遍，内存不随日志大小涨。"""
+    credit = trae_latest_credit(trae_read_tail(path))
+    if credit is not None:
+        return credit
+    found = None
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = TRAE_CREDIT_RE.search(line)
+                if match:
+                    found = match
+    except OSError:
+        return None
+    return trae_credit_from_match(found) if found else None
+
+
+def collect_trae() -> dict:
+    files = trae_log_files()
+    if not files:
+        return fail("未找到 Trae 日志，请先打开 Trae 并登录")
+    now = int(time.time())
+    for path in files[:TRAE_LOG_FILES_LIMIT]:
+        credit = trae_scan_file(path)
+        if credit is None:
+            continue
+        epoch, remaining = credit
+        if remaining < 0:
+            continue
+        # 积分是余额而不是周期额度，所以只有 remaining、没有 total/usedPercent；
+        # 时间戳用日志里那条记录的时刻，重复采集同一个余额不会被算成「没消耗」。
+        return {
+            "ok": True,
+            "plan": "unknown",
+            "remaining": round(remaining, 2),
+            "unit": "credits",
+            "source": "trae-log",
+            "updatedAt": epoch if epoch is not None else now,
+        }
+    return fail("Trae 日志里还没有积分记录，请在 Trae 里打开一次额度面板")
+
+
 # ---------------------------------------------------------------- main
 
 # 采集入口与分组。分组与 Swift 侧 Providers 注册表的刷新节奏一一对应：
@@ -932,6 +1033,7 @@ COLLECTORS = {
     "workbuddy": collect_workbuddy,
     "qoder": collect_qoder,
     "claude": collect_claude,
+    "trae": collect_trae,
 }
 
 GROUPS = {
