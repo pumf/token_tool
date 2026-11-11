@@ -660,6 +660,13 @@ struct AnalyticsSuite {
             let input = UsageInput(remaining: nil, total: nil, remainingPercent: nil, windows: [])
             expectNil(UsageAnalytics.sample(provider: .qoder, input: input, at: noon))
         }
+        test("只有余额的一家也要留下样本") {
+            let input = UsageInput(remaining: 1286, total: nil, remainingPercent: nil, windows: [])
+            let sample = UsageAnalytics.sample(provider: .trae, input: input, at: noon)
+            expectEqual(sample?.remaining, 1286)
+            expectNil(sample?.total)
+            expectNil(sample?.remainingPercent)
+        }
     }
 
     // MARK: 供应商注册表

@@ -151,7 +151,8 @@ enum UsageAnalytics {
         } else {
             percent = currentPercent(provider: provider, input: input)
         }
-        guard percent != nil || !windows.isEmpty else { return nil }
+        // Trae 只有余额没有总额度，percent 恒为 nil：这类样本仍要入库，否则这家永远没有历史。
+        guard percent != nil || !windows.isEmpty || input.remaining != nil else { return nil }
         return UsageSample(
             at: Int(date.timeIntervalSince1970),
             remaining: provider.isPercent ? nil : input.remaining,
