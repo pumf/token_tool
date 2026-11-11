@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 enum Theme {
     static let qoder = Color(red: 0.20, green: 0.49, blue: 0.98)
@@ -286,6 +287,8 @@ struct ProviderCard<Detail: View>: View {
     let footer: String
     let links: [ProviderLink]
     let compact: Bool
+    /// 非空时在卡片右上角画一个抓手，拖动它交换卡片顺序。
+    let dragPayload: (() -> NSItemProvider)?
     let detail: Detail
 
     init(
@@ -301,6 +304,7 @@ struct ProviderCard<Detail: View>: View {
         footer: String,
         links: [ProviderLink] = [],
         compact: Bool = false,
+        dragPayload: (() -> NSItemProvider)? = nil,
         @ViewBuilder detail: () -> Detail
     ) {
         self.title = title
@@ -315,6 +319,7 @@ struct ProviderCard<Detail: View>: View {
         self.footer = footer
         self.links = links
         self.compact = compact
+        self.dragPayload = dragPayload
         self.detail = detail()
     }
 
@@ -339,6 +344,15 @@ struct ProviderCard<Detail: View>: View {
                     }
                 }
                 Spacer(minLength: Token.spaceRow)
+                if let dragPayload {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 12, height: 22)
+                        .contentShape(Rectangle())
+                        .onDrag { dragPayload() }
+                        .help("按住上下拖动改变卡片顺序；也可以在卡片上右键选择上移或下移")
+                }
                 if let plan {
                     Text(plan)
                         .font(.system(size: 10, weight: .semibold))
@@ -459,6 +473,37 @@ struct ProviderCard<Detail: View>: View {
             }
         }
         .frame(height: 20)
+    }
+}
+
+/// 面板密度三档。常规给全部细节，简单只留主用量与今日消耗，极简一行一家只看数字。
+enum PanelDensity: String, CaseIterable, Identifiable {
+    case full
+    case simple
+    case minimal
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .full: return "常规"
+        case .simple: return "简单"
+        case .minimal: return "极简"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .full: return "常规模式：进度条、洞察、耗尽预测与更新时间全部显示"
+        case .simple: return "简单模式：各平台只显示主要用量与今日消耗，隐藏预测与更新时间"
+        case .minimal: return "极简模式：一家一行，只显示色点、名称、数值与口径"
+        }
+    }
+
+    /// 1.8.0 之前只有 ui.simpleMode 一个布尔，没有 ui.density 时按它迁移。
+    static func stored(raw: String?, legacySimple: Bool?) -> PanelDensity {
+        if let raw, let value = PanelDensity(rawValue: raw) { return value }
+        return legacySimple == true ? .simple : .full
     }
 }
 
@@ -727,9 +772,11 @@ struct MenuContent: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("AI 用量")
                     .font(.system(size: 16, weight: .bold))
-                Text(Providers.ordered.map(\.displayName).joined(separator: " · "))
-                    .font(Token.caption)
-                    .foregroundStyle(.secondary)
+                if !store.minimalMode {
+                    Text(store.panelProviders.map(\.displayName).joined(separator: " · "))
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             if store.isRefreshing {
@@ -780,13 +827,7 @@ struct MenuContent: View {
                 iconOff: "exclamationmark.triangle",
                 help: "任一平台剩余低于 \(store.lowBalanceThreshold)% 时提醒"
             )
-            settingChip(
-                "简单",
-                isOn: $store.simpleMode,
-                iconOn: "rectangle.compress.vertical",
-                iconOff: "rectangle.expand.vertical",
-                help: "简单模式：各平台只显示主要用量与今日消耗，隐藏预测与更新时间"
-            )
+            densityMenu
             Button {
                 settingsExpanded.toggle()
             } label: {
@@ -868,33 +909,61 @@ struct MenuContent: View {
                     .fill(Token.insetFill)
             )
         } else if !store.attentionItems.isEmpty {
-            VStack(alignment: .leading, spacing: Token.spaceTight) {
-                ForEach(store.attentionItems) { item in
-                    attentionRow(item)
-                }
+            if store.minimalMode {
+                // 极简模式里这块不能比五行数字还高：每条只留标题，拼成一行。
                 HStack(spacing: 6) {
-                    Text("\(store.attentionItems.count) 项需要留意")
+                    Image(systemName: store.attentionItems.first?.icon ?? "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(attentionTint)
+                    Text(store.attentionItems.map(\.title).joined(separator: " · "))
                         .font(Token.caption)
-                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(store.attentionItems.map { "\($0.title)：\($0.detail)" }.joined(separator: "\n"))
                     Spacer(minLength: 4)
-                    Button("静音 30 分钟") {
+                    Button("静音") {
                         store.muteAttention()
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(Token.caption)
                     .foregroundStyle(attentionTint.opacity(0.9))
                     .help("30 分钟内不再高亮菜单栏、也不再显示这条提示")
                 }
+                .padding(.horizontal, Token.spaceTight + 2)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                        .fill(attentionTint.opacity(0.10))
+                )
+            } else {
+                VStack(alignment: .leading, spacing: Token.spaceTight) {
+                    ForEach(store.attentionItems) { item in
+                        attentionRow(item)
+                    }
+                    HStack(spacing: 6) {
+                        Text("\(store.attentionItems.count) 项需要留意")
+                            .font(Token.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Button("静音 30 分钟") {
+                            store.muteAttention()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(attentionTint.opacity(0.9))
+                        .help("30 分钟内不再高亮菜单栏、也不再显示这条提示")
+                    }
+                }
+                .padding(Token.spaceRow)
+                .background(
+                    RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                        .fill(attentionTint.opacity(0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                        .stroke(attentionTint.opacity(0.32), lineWidth: Token.hairline)
+                )
             }
-            .padding(Token.spaceRow)
-            .background(
-                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                    .fill(attentionTint.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                    .stroke(attentionTint.opacity(0.32), lineWidth: Token.hairline)
-            )
         }
     }
 
@@ -1039,10 +1108,103 @@ struct MenuContent: View {
     }
 
     /// 各家共用一套卡片外壳，内容按额度口径与额度布局分派，新增供应商不需要再加卡片。
+    /// 顺序来自 store.cardOrder（拖动过的话会记住），极简模式换成行式列表。
     @ViewBuilder
     private var providerCards: some View {
-        ForEach(Providers.ordered, id: \.id) { descriptor in
-            providerCard(descriptor.id)
+        if store.minimalMode {
+            minimalRows
+        } else {
+            ForEach(store.panelProviders, id: \.id) { descriptor in
+                reorderableCard(descriptor)
+            }
+        }
+    }
+
+    private func reorderableCard(_ descriptor: ProviderDescriptor) -> some View {
+        providerCard(descriptor.id)
+            .onDrop(of: [.text], isTargeted: nil) { providers, _ in
+                acceptCardDrop(providers, onto: descriptor.id)
+            }
+            .contextMenu { cardOrderMenu(descriptor) }
+    }
+
+    /// 拖拽载荷只带供应商 id；异步取回时顺序可能已经变过，落点按取回那一刻的槽位算。
+    private func acceptCardDrop(_ providers: [NSItemProvider], onto target: UsageProvider) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let raw = object as? String, let dragged = UsageProvider(rawValue: raw) else { return }
+            Task { @MainActor in store.moveCard(dragged, onto: target) }
+        }
+        return true
+    }
+
+    /// 菜单栏面板里拖动可能被系统弹窗抢走焦点，所以再给一组菜单项兜底。
+    @ViewBuilder
+    private func cardOrderMenu(_ descriptor: ProviderDescriptor) -> some View {
+        Button("上移") { store.shiftCard(descriptor.id, by: -1) }
+        Button("下移") { store.shiftCard(descriptor.id, by: 1) }
+        Button("置顶") { store.shiftCard(descriptor.id, by: -store.cardOrder.count) }
+        Divider()
+        Button("恢复默认顺序") { store.resetCardOrder() }
+    }
+
+    private var minimalRows: some View {
+        VStack(spacing: Token.spaceTight - 2) {
+            ForEach(store.panelProviders, id: \.id) { descriptor in
+                minimalRow(descriptor)
+                    .onDrag { NSItemProvider(object: descriptor.id.rawValue as NSString) }
+                    .onDrop(of: [.text], isTargeted: nil) { providers, _ in
+                        acceptCardDrop(providers, onto: descriptor.id)
+                    }
+                    .contextMenu { cardOrderMenu(descriptor) }
+            }
+        }
+    }
+
+    /// 极简模式一家一行：色点、名称、数值、口径。明细、预测与更新时间都不占高度。
+    private func minimalRow(_ descriptor: ProviderDescriptor) -> some View {
+        let provider = descriptor.id
+        return HStack(spacing: Token.spaceTight) {
+            Circle()
+                .fill(descriptor.color)
+                .frame(width: 6, height: 6)
+            Text(descriptor.displayName)
+                .font(Token.label)
+                .frame(width: 78, alignment: .leading)
+                .lineLimit(1)
+            Spacer(minLength: Token.spaceTight)
+            Text(cardValue(provider))
+                .font(.system(size: 13, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(store.error(for: provider) != nil ? Theme.warning : Color.primary)
+            Text(minimalCaption(provider))
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 54, alignment: .trailing)
+                .lineLimit(1)
+        }
+        .frame(height: 22)
+        .padding(.horizontal, Token.spaceTight + 2)
+        .background(
+            RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                .fill(Token.insetFill)
+        )
+        .help("\(descriptor.displayName) · \(minimalCaption(provider)) · \(cardFooter(provider))")
+    }
+
+    /// 右侧口径：积分制给剩余比例，窗口制给窗口长度，只有余额的一家给单位。
+    private func minimalCaption(_ provider: UsageProvider) -> String {
+        guard let result = store.result(for: provider), result.ok == true else { return "等待采集" }
+        switch provider.quotaKind {
+        case .credits:
+            if provider.descriptor.creditLayout == .balanceOnly {
+                return provider.descriptor.creditUnit
+            }
+            guard let percent = result.remainingPercent, percent > 0 else { return provider.descriptor.creditUnit }
+            return "\(Format.percent(percent)) 剩余"
+        case .percentWindow:
+            guard let window = result.primaryWindow else { return "等待采集" }
+            return Format.window(window.windowMinutes)
         }
     }
 
@@ -1051,7 +1213,7 @@ struct MenuContent: View {
     @ViewBuilder
     private var weeklySummary: some View {
         if !store.simpleMode {
-            let rows = Providers.ordered.compactMap { descriptor -> (ProviderDescriptor, WeeklyUsage)? in
+            let rows = store.panelProviders.compactMap { descriptor -> (ProviderDescriptor, WeeklyUsage)? in
                 guard let weekly = store.weekly(for: descriptor.id), weekly.thisWeek != nil else { return nil }
                 return (descriptor, weekly)
             }
@@ -1150,7 +1312,8 @@ struct MenuContent: View {
             status: store.error(for: provider),
             footer: cardFooter(provider),
             links: cardLinks(provider),
-            compact: store.simpleMode
+            compact: store.simpleMode,
+            dragPayload: { NSItemProvider(object: provider.rawValue as NSString) }
         ) {
             providerContent(provider)
         }
@@ -1591,13 +1754,9 @@ struct MenuContent: View {
     @ViewBuilder
     private var interfaceSettings: some View {
         settingRow("界面") {
-            settingChip(
-                "简单模式",
-                isOn: $store.simpleMode,
-                iconOn: "rectangle.compress.vertical",
-                iconOff: "rectangle.expand.vertical",
-                help: "各平台只显示主要用量与今日消耗，隐藏预测与更新时间"
-            )
+            ForEach(PanelDensity.allCases) { density in
+                densityChip(density)
+            }
         }
         settingRow("快捷键") {
             settingChip(
@@ -1618,7 +1777,7 @@ struct MenuContent: View {
             }
         }
         settingWideRow("菜单栏") {
-            ForEach(Providers.ordered, id: \.id) { descriptor in
+            ForEach(store.panelProviders, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
                     isOn: store.menuBarBinding(for: descriptor.id),
@@ -1669,7 +1828,7 @@ struct MenuContent: View {
 
     private var reminderSettings: some View {
         settingWideRow("提醒") {
-            ForEach(Providers.ordered, id: \.id) { descriptor in
+            ForEach(store.panelProviders, id: \.id) { descriptor in
                 settingChip(
                     descriptor.displayName,
                     isOn: store.reminderBinding(for: descriptor.id),
@@ -1761,6 +1920,71 @@ struct MenuContent: View {
             )
         )
         .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
+    }
+
+    /// 页脚那颗模式按钮：三档密度收进一个菜单，标签跟着当前档走。
+    private var densityMenu: some View {
+        Menu {
+            ForEach(PanelDensity.allCases) { density in
+                Button {
+                    store.density = density
+                } label: {
+                    if store.density == density {
+                        Label(density.title, systemImage: "checkmark")
+                    } else {
+                        Text(density.title)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.compress.vertical")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(store.density.title)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .fixedSize()
+            .foregroundStyle(store.density == .full ? Color.secondary : Color.primary)
+            .background(
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                    .fill(store.density == .full ? Color.clear : Color.primary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
+                    .stroke(Token.cardStroke.opacity(store.density == .full ? 0.4 : 0.8), lineWidth: Token.hairline)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(store.density.help)
+    }
+
+    private func densityChip(_ density: PanelDensity) -> some View {
+        let selected = store.density == density
+        return Button {
+            store.density = density
+        } label: {
+            Text(density.title)
+                .font(.system(size: 10, weight: selected ? .semibold : .regular))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .fixedSize()
+                .foregroundStyle(selected ? Theme.qoder : Color.secondary)
+                .background(
+                    Capsule().fill(selected ? Theme.qoder.opacity(0.14) : Token.insetFill)
+                )
+                .overlay(
+                    Capsule().stroke(
+                        selected ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
+                        lineWidth: Token.hairline
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .help(density.help)
     }
 
     private func styleChip(_ style: MenuBarStyle) -> some View {

@@ -249,4 +249,35 @@ extension Providers {
     static let panelRefreshProviders: [UsageProvider] = all
         .filter(\.refreshOnPanelOpen)
         .map(\.id)
+
+    // MARK: 用户自定义顺序（纯函数，方便测试）
+
+    /// 已存顺序里可能残留下架的供应商，也可能缺新接入的一家：都按注册表纠正回来。
+    static func order(stored: [String]) -> [UsageProvider] {
+        let known = stored.compactMap(UsageProvider.init(rawValue:))
+        let missing = all.map(\.id).filter { !known.contains($0) }
+        return known + missing
+    }
+
+    /// 拖动换位：拖过来的那张落到目标当前的槽位，其余依次补位。
+    static func moved(_ order: [UsageProvider], _ dragged: UsageProvider, onto target: UsageProvider) -> [UsageProvider] {
+        guard dragged != target,
+              let from = order.firstIndex(of: dragged),
+              let to = order.firstIndex(of: target) else { return order }
+        var result = order
+        result.remove(at: from)
+        result.insert(dragged, at: to > from ? to - 1 : to)
+        return result
+    }
+
+    /// 菜单里的上移/下移/置顶：越界就停在两端。
+    static func shifted(_ order: [UsageProvider], _ provider: UsageProvider, by offset: Int) -> [UsageProvider] {
+        guard let from = order.firstIndex(of: provider) else { return order }
+        let to = min(max(0, from + offset), order.count - 1)
+        guard to != from else { return order }
+        var result = order
+        result.remove(at: from)
+        result.insert(provider, at: to)
+        return result
+    }
 }

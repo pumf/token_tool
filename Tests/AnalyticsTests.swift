@@ -158,6 +158,7 @@ struct AnalyticsSuite {
         runFormatting()
         runSample()
         runRegistry()
+        runCardOrder()
         runPersistence()
         runExport()
         runMenuBar()
@@ -763,6 +764,53 @@ struct AnalyticsSuite {
             expectEqual(NotificationCategory.forProvider(.trae), "provider.trae")
             expectEqual(NotificationCategory.openAction(for: .codex), "open.codex")
             expectEqual(NotificationCategory.all.count, Providers.ordered.count)
+        }
+    }
+
+    // MARK: 卡片顺序与显示密度
+
+    static func runCardOrder() {
+        let base: [UsageProvider] = [.qoder, .workbuddy, .codex, .claude, .trae]
+        test("没有存过顺序时用注册表顺序") {
+            expectEqual(Providers.order(stored: []), base)
+        }
+        test("存过的顺序丢弃下架项并把新接入的排到末尾") {
+            expectEqual(Providers.order(stored: ["trae", "qoder", "removed"]), [.trae, .qoder, .workbuddy, .codex, .claude])
+        }
+        test("往下拖落到目标的槽位") {
+            expectEqual(Providers.moved(base, .qoder, onto: .claude), [.workbuddy, .codex, .qoder, .claude, .trae])
+        }
+        test("往上拖落到目标的槽位") {
+            expectEqual(Providers.moved(base, .trae, onto: .workbuddy), [.qoder, .trae, .workbuddy, .codex, .claude])
+        }
+        test("拖给自己或不存在的位置不改顺序") {
+            expectEqual(Providers.moved(base, .codex, onto: .codex), base)
+            expectEqual(Providers.moved(base, .codex, onto: .claude).count, base.count)
+        }
+        test("上移下移越界停在两端") {
+            expectEqual(Providers.shifted(base, .codex, by: -1), [.qoder, .codex, .workbuddy, .claude, .trae])
+            expectEqual(Providers.shifted(base, .codex, by: 1), [.qoder, .workbuddy, .claude, .codex, .trae])
+            expectEqual(Providers.shifted(base, .claude, by: -base.count).first, .claude)
+            expectEqual(Providers.shifted(base, .workbuddy, by: base.count).last, .workbuddy)
+            expectEqual(Providers.shifted(base, .codex, by: 0), base)
+        }
+        test("换位与移动后顺序始终是完整五家") {
+            let moved = Providers.shifted(Providers.moved(base, .trae, onto: .qoder), .claude, by: 1)
+            expectEqual(Set(moved).count, 5)
+            expectEqual(moved.count, 5)
+        }
+        test("密度从旧的 simpleMode 布尔迁移") {
+            expectEqual(PanelDensity.stored(raw: nil, legacySimple: true), .simple)
+            expectEqual(PanelDensity.stored(raw: nil, legacySimple: false), .full)
+            expectEqual(PanelDensity.stored(raw: nil, legacySimple: nil), .full)
+            expectEqual(PanelDensity.stored(raw: "minimal", legacySimple: true), .minimal)
+            expectEqual(PanelDensity.stored(raw: "bogus", legacySimple: true), .simple)
+        }
+        test("三档密度都有标题与说明") {
+            expectEqual(PanelDensity.allCases.map(\.title), ["常规", "简单", "极简"])
+            for density in PanelDensity.allCases {
+                check(!density.help.isEmpty, "密度 \(density.title) 缺少说明")
+            }
         }
     }
 

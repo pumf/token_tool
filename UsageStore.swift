@@ -68,9 +68,19 @@ final class UsageStore: ObservableObject {
     @Published var menuBarBlink: Bool {
         didSet { UserDefaults.standard.set(menuBarBlink, forKey: "attention.menuBar.blink") }
     }
-    @Published var simpleMode: Bool {
-        didSet { UserDefaults.standard.set(simpleMode, forKey: "ui.simpleMode") }
+    /// 面板密度：常规 / 简单 / 极简。旧版本只有 ui.simpleMode 布尔，首次启动时迁移。
+    @Published var density: PanelDensity {
+        didSet { UserDefaults.standard.set(density.rawValue, forKey: "ui.density") }
     }
+    /// 简单与极简都属于「收起来」，卡片外壳的紧凑排法沿用这个判断。
+    var simpleMode: Bool { density != .full }
+    var minimalMode: Bool { density == .minimal }
+    /// 卡片顺序，用户拖动后写入 ui.card.order；注册表顺序是兜底默认值。
+    @Published var cardOrder: [UsageProvider] {
+        didSet { UserDefaults.standard.set(cardOrder.map(\.rawValue), forKey: "ui.card.order") }
+    }
+    /// 面板、本周汇总、菜单栏文字都走同一套顺序，新接入的一家永远排在末尾。
+    var panelProviders: [ProviderDescriptor] { cardOrder.map { $0.descriptor } }
     @Published var menuBarStyle: MenuBarStyle {
         didSet { UserDefaults.standard.set(menuBarStyle.rawValue, forKey: "menuBar.style") }
     }
@@ -112,6 +122,17 @@ final class UsageStore: ObservableObject {
         return [10, 20, 30].contains(value) ? value : 20
     }
 
+    private static func storedDensity() -> PanelDensity {
+        PanelDensity.stored(
+            raw: UserDefaults.standard.string(forKey: "ui.density"),
+            legacySimple: UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool
+        )
+    }
+
+    private static func storedCardOrder() -> [UsageProvider] {
+        Providers.order(stored: UserDefaults.standard.stringArray(forKey: "ui.card.order") ?? [])
+    }
+
     /// 注册表里的刷新节奏分组，间隔小的排在前面。
     private static let groups = Providers.groups
 
@@ -123,7 +144,8 @@ final class UsageStore: ObservableObject {
         monthlyBudget = max(0, UserDefaults.standard.integer(forKey: "alert.budget.monthly"))
         menuBarHighlight = Self.storedFlag("attention.menuBar.highlight")
         menuBarBlink = Self.storedFlag("attention.menuBar.blink")
-        simpleMode = UserDefaults.standard.object(forKey: "ui.simpleMode") as? Bool ?? false
+        density = Self.storedDensity()
+        cardOrder = Self.storedCardOrder()
         menuBarStyle = MenuBarStyle(rawValue: UserDefaults.standard.string(forKey: "menuBar.style") ?? "") ?? .classic
         hotKeyEnabled = Self.storedFlag("hotkey.enabled")
         let muteEpoch = UserDefaults.standard.double(forKey: "attention.mute.until")
@@ -192,6 +214,20 @@ final class UsageStore: ObservableObject {
                 self.reminderSettingChanged()
             }
         )
+    }
+
+    /// 拖到另一张卡片上：拖动的那张落到目标当前的槽位，其余依次补位。
+    func moveCard(_ dragged: UsageProvider, onto target: UsageProvider) {
+        cardOrder = Providers.moved(cardOrder, dragged, onto: target)
+    }
+
+    /// 右键菜单的兜底通道：菜单栏面板里拖动不一定稳，上移/下移/置顶总能用。
+    func shiftCard(_ provider: UsageProvider, by offset: Int) {
+        cardOrder = Providers.shifted(cardOrder, provider, by: offset)
+    }
+
+    func resetCardOrder() {
+        cardOrder = Providers.all.map(\.id)
     }
 
     /// 页脚的采集时间戳：节奏最快的一组沿用的是「刷新」这个叫法，其余按组内供应商名。
@@ -1238,7 +1274,7 @@ final class UsageStore: ObservableObject {
 
 extension UsageStore {
     var menuBarMetrics: [MenuBarMetric] {
-        Providers.ordered.compactMap { menuBarMetric(for: $0) }
+        panelProviders.compactMap { menuBarMetric(for: $0) }
     }
 
     private func menuBarMetric(for descriptor: ProviderDescriptor) -> MenuBarMetric? {
@@ -1301,7 +1337,7 @@ extension UsageStore {
         if !isAttentionMuted, let item = attentionItems.first {
             parts.append(item.kind == .warning ? "需要关注：\(item.title)" : "待处理：\(item.title)")
         }
-        parts.append(contentsOf: Providers.ordered.map { tooltipLine(for: $0) })
+        parts.append(contentsOf: panelProviders.map { tooltipLine(for: $0) })
         return parts.joined(separator: " · ")
     }
 
