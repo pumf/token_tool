@@ -57,6 +57,9 @@ struct ProviderResult: Codable, Sendable {
     var total: Double?
     var remaining: Double?
     var used: Double?
+    /// used 的口径："today"=今日消耗，"cumulative"/缺省=累计用量（Trae/WorkBuddy/Qoder 的 API 都只给累计口径）。
+    /// 今日消耗一律由 history 差分推导。
+    var usedScope: String?
     var usedPercent: Double?
     var remainingPercent: Double?
     var packages: Int?
@@ -68,19 +71,28 @@ struct ProviderResult: Codable, Sendable {
     var addonTotal: Double?
     var orgResourcePackage: String?
     var source: String?
+    /// 只报余额的平台（Trae）：本次采集时刻；updatedAt 是数据源里的原始时刻。
+    var collectedAt: Int?
+    /// 采集器判断数据源太久没动过（如 Trae 不再写积分日志）时置真，页面负责提示。
+    var stale: Bool?
 
     var updatedDate: Date? {
         guard let updatedAt else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(updatedAt))
     }
 
+    var collectedDate: Date? {
+        guard let collectedAt else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(collectedAt))
+    }
+
     var primaryWindow: CodexWindow? { windows?.first }
 
     private enum CodingKeys: String, CodingKey {
         case ok, error, updatedAt, plan, accountType, windows, credits, resetCredits
-        case total, remaining, used, usedPercent, remainingPercent, packages, unit
+        case total, remaining, used, usedScope, usedPercent, remainingPercent, packages, unit
         case planExpiresAt, planUsed, planTotal, addonUsed, addonTotal
-        case orgResourcePackage, source
+        case orgResourcePackage, source, collectedAt, stale
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +108,7 @@ struct ProviderResult: Codable, Sendable {
         total = container.loose(Double.self, .total)
         remaining = container.loose(Double.self, .remaining)
         used = container.loose(Double.self, .used)
+        usedScope = container.loose(String.self, .usedScope)
         usedPercent = container.loose(Double.self, .usedPercent)
         remainingPercent = container.loose(Double.self, .remainingPercent)
         packages = container.loose(Int.self, .packages)
@@ -107,6 +120,8 @@ struct ProviderResult: Codable, Sendable {
         addonTotal = container.loose(Double.self, .addonTotal)
         orgResourcePackage = container.loose(String.self, .orgResourcePackage)
         source = container.loose(String.self, .source)
+        collectedAt = container.loose(Int.self, .collectedAt)
+        stale = container.loose(Bool.self, .stale)
     }
 }
 

@@ -1473,7 +1473,12 @@ struct MenuContent: View {
         if store.error(for: provider) != nil, result != nil {
             return "上次成功 \(Format.time(result?.updatedDate))"
         }
-        return "更新于 \(Format.time(result?.updatedDate ?? store.lastCollectedAt(for: provider)))"
+        let updated = result?.updatedDate ?? store.lastCollectedAt(for: provider)
+        // 采集器报告数据源太久没动过（Trae 3.4.17 起消耗后不再写积分日志）时明说，免得旧数被当成实时。
+        if result?.stale == true {
+            return "更新于 \(Format.time(updated)) · 数据可能过期"
+        }
+        return "更新于 \(Format.time(updated))"
     }
 
     private func cardLinks(_ provider: UsageProvider) -> [ProviderLink] {

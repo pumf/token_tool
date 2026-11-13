@@ -31,6 +31,8 @@ enum CreditLayout: Sendable {
 enum ProviderSetup: Sendable {
     case none
     case qoderCLI
+    /// Trae 实时采集：退出并以本机调试端口重启 Trae，让采集器直读内存余额。
+    case traeLive
 }
 
 /// 一个供应商所需的全部静态信息。
@@ -82,7 +84,7 @@ enum Providers {
             quotaKind: .credits,
             creditUnit: "额度",
             creditLayout: .planBreakdown,
-            refreshInterval: 90,
+            refreshInterval: 60,
             collectorTimeout: 80,
             clientName: "Qoder",
             clientBundleID: "com.qodercn.app",
@@ -160,7 +162,7 @@ enum Providers {
             quotaKind: .percentWindow,
             creditUnit: "",
             creditLayout: nil,
-            refreshInterval: 120,
+            refreshInterval: 60,
             collectorTimeout: 75,
             clientName: "Claude",
             clientBundleID: "com.anthropic.claudefordesktop",
@@ -179,14 +181,14 @@ enum Providers {
             id: .trae,
             collectorKey: "trae",
             displayName: "Trae",
-            subtitle: "客户端日志 · 积分余额",
+            subtitle: "实时 API · 积分余额",
             icon: "t.square.fill",
             menuBarLetter: "T",
             color: Theme.trae,
             quotaKind: .credits,
-            creditUnit: "积分",
-            creditLayout: .balanceOnly,
-            refreshInterval: 120,
+            creditUnit: "额度",
+            creditLayout: .resourcePackage,
+            refreshInterval: 60,
             collectorTimeout: 20,
             clientName: "Trae CN",
             clientBundleID: "cn.trae.app",
@@ -198,7 +200,7 @@ enum Providers {
             reminderDefaultsKey: "reminder.trae.claim",
             menuBarDefaultsKey: "menuBar.trae",
             refreshOnPanelOpen: false,
-            setup: .none,
+            setup: .traeLive,
             defaultInMenuBar: false
         ),
     ]

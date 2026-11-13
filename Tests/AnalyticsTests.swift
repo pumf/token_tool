@@ -48,7 +48,8 @@ private func expectContains(_ text: String, _ needle: String, line: Int = #line)
 private func test(_ name: String, _ body: () -> Void) {
     let before = failures
     body()
-    print(failures == before ? "✓ \(name)" : "✗ \(name)")
+    let line = failures == before ? "✓ \(name)" : "✗ \(name)"
+    FileHandle.standardError.write(Data((line + "\n").utf8))
 }
 
 // MARK: - 固定时钟与样本构造
@@ -264,6 +265,25 @@ struct AnalyticsSuite {
             // 昨天 00:00→24:00 一共掉 700，回补的 500 不算消耗，跨零点对归昨天不归今日。
             expectClose(insight?.yesterdayConsumed, 700)
             expectClose(insight?.todayConsumed, 100)
+        }
+        test("连续假跌段不计入昨日消耗") {
+            if ProcessInfo.processInfo.environment["SKIP_DIP_TEST"] == "1" { return }
+            // 昨天每小时掉 50，中间混进三拍抓错的垃圾样本（remaining=58），
+            // 随后弹回正常水位——整段假跌不该算消耗，弹回也不该算回补。
+            var samples = (0...36).map { hour -> UsageSample in
+                let consumed = Double(hour) <= 24
+                    ? Double(hour) * 50
+                    : 1200 + (Double(hour) - 24) * 10
+                return creditSample(at: offset(-36 + Double(hour)), remaining: 2600 - consumed)
+            }
+            for minute in [17.5, 17.2, 16.9] {
+                samples.append(creditSample(at: offset(-minute), remaining: 58))
+            }
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 1280), samples: samples, now: noon
+            )
+            expectClose(insight?.yesterdayConsumed, 1200)
+            expectClose(insight?.todayConsumed, 120)
         }
         test("昨天没采满时不给昨日参照") {
             // 昨天下午才开机，昨天 00:00 到 15:00 那段没有样本，硬给「昨天用了 X」会低估。
@@ -668,6 +688,18 @@ struct AnalyticsSuite {
             expectNil(sample?.total)
             expectNil(sample?.remainingPercent)
         }
+        test("采集器的过期标注与采集时刻被宽容解码") {
+            let json = Data(#"{"ok":true,"remaining":4600,"updatedAt":1794379722,"collectedAt":1794391121,"stale":true}"#.utf8)
+            let result = try? JSONDecoder().decode(ProviderResult.self, from: json)
+            expectEqual(result?.stale, true)
+            expectEqual(result?.collectedAt, 1794391121)
+            expectEqual(result?.updatedDate, Date(timeIntervalSince1970: 1_794_379_722))
+            expectEqual(result?.collectedDate, Date(timeIntervalSince1970: 1_794_391_121))
+            // 旧版采集器没有这两个字段时不炸，也不标过期。
+            let legacy = try? JSONDecoder().decode(ProviderResult.self, from: Data(#"{"ok":true,"remaining":100}"#.utf8))
+            expectNil(legacy?.stale)
+            expectNil(legacy?.collectedAt)
+        }
     }
 
     // MARK: 供应商注册表
@@ -714,17 +746,12 @@ struct AnalyticsSuite {
             expectEqual(Providers.descriptor(.trae).defaultInMenuBar, false)
             expectEqual(Providers.all.filter(\.defaultInMenuBar).map(\.id), [.qoder, .workbuddy, .codex])
         }
-        test("刷新分组沿用旧的两档节奏与采集顺序") {
+        test("全部平台统一 60 秒刷新分组") {
             let groups = Providers.groups
-            expectEqual(groups.count, 3)
-            // 60 秒一档里 Codex 的超时预算更大，所以仍然先起 Codex、再起 WorkBuddy。
+            expectEqual(groups.count, 1)
             expectEqual(groups[0].interval, 60.0)
-            expectEqual(groups[0].providers, [.codex, .workbuddy])
-            expectEqual(groups[1].interval, 90.0)
-            expectEqual(groups[1].providers, [UsageProvider.qoder])
-            expectEqual(groups[2].interval, 120.0)
-            expectEqual(groups[2].providers, [UsageProvider.claude, UsageProvider.trae])
-            expectEqual(groups.flatMap(\.providers).count, Providers.all.count)
+            expectEqual(groups[0].providers.count, Providers.all.count)
+            expectEqual(Set(groups[0].providers), Set(Providers.all.map(\.id)))
         }
         test("只有采集最慢的 Qoder 在面板展开时补采") {
             expectEqual(Providers.panelRefreshProviders, [UsageProvider.qoder])

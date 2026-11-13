@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -380,6 +381,7 @@ def collect_workbuddy() -> dict:
             "total": round(total, 2),
             "remaining": round(remaining, 2),
             "used": round(used, 2),
+            "usedScope": "cumulative",
             "usedPercent": percent,
             "remainingPercent": round(100.0 - percent, 2),
             "packages": len(packages),
@@ -446,6 +448,11 @@ def qoder_env():
     for key in list(env):
         if key.startswith("QODER_AGENT_SDK_") or key.startswith("QODER_SDK_"):
             env.pop(key, None)
+    # qoderclicn 检测到 CI 环境变量会走 headless 模式（不开交互 TUI，秒退 exit 42）。
+    # GUI App 从 Trae 等沙箱 shell 经 open 启动时会被注入 CI=true，必须摘掉。
+    for key in ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI",
+                "TEAMCITY_VERSION", "BUILDKITE", "JENKINS_URL", "CIRCLECI", "TRAVIS"):
+        env.pop(key, None)
     env["TERM"] = "xterm-256color"
     env["BROWSER"] = "/usr/bin/true"
     return env
@@ -508,6 +515,7 @@ def parse_qoder(text):
         "total": round(total, 2),
         "remaining": round(remaining, 2),
         "used": round(plan_used + addon_used, 2),
+        "usedScope": "cumulative",
         "usedPercent": percent,
         "remainingPercent": round(100.0 - percent, 2),
         "unit": "credits",
@@ -937,6 +945,9 @@ TRAE_CREDIT_RE = re.compile(
 )
 TRAE_LOG_TAIL_BYTES = 2 * 1024 * 1024
 TRAE_LOG_FILES_LIMIT = 6
+# 积分行只在变动时写一条；3.4.17 起客户端可能在消耗后也不再写。
+# 超过这个时长没动过的余额按「可能过期」上报，页面负责提示。
+TRAE_STALE_SECONDS = 6 * 3600
 
 
 def trae_stamp_epoch(stamp):
@@ -998,11 +1009,455 @@ def trae_scan_file(path):
     return trae_credit_from_match(found) if found else None
 
 
+# Trae 把积分余额只存在渲染进程内存里（每 1-2 分钟轮询 api.trae.cn/ide_user_ent_usage），
+# 3.4.17 起消耗后也不再写日志，日志兜底注定读不到实时数。更麻烦的是：该 API 做了 TLS/JA3
+# 指纹校验——只有 Trae 自己进程里的 fetch（Chromium 网络栈）能通，curl/python urllib/Node fetch
+# 全部 401。因此唯一解法是：让 collector 通过 CDP 调试端口在 Trae 渲染进程里执行 fetch。
+# 需要 Trae 带 --remote-debugging-port=9335 启动（"启用实时采集"按钮会自动处理）。
+TRAE_CDP_PORT = 9335
+TRAE_CDP_MAX_TARGETS = 4
+TRAE_CDP_NETWORK_WAIT = 6.0
+# 余额只认「正的、量级合理的数」，过滤掉页面上随手可拾的其他数字。
+TRAE_CDP_NUMBER_MAX = 10_000_000
+TRAE_JWT_TOKEN_PATH = HOME / ".trae-cn" / "trae-jwt-token"
+TRAE_API_URL = "https://api.trae.cn/trae/api/v2/pay/ide_user_ent_usage"
+# 测试里设 TOKENTOOL_DISABLE_CDP=1 跳过 CDP 层，避免误连真机
+TRAE_CDP_ENABLED = os.environ.get("TOKENTOOL_DISABLE_CDP") != "1"
+
+# 在 Trae 渲染进程里直接调 fetch API（Chromium 网络栈能绕过 TLS 指纹校验）。
+# token 由 Python 预读，通过字符串插值注入——CDP evaluate 完上下文立即释放，不会残留。
+TRAE_FETCH_API_JS = """(async () => {
+  const TOKEN = %s;
+  try {
+    const r = await fetch(%r, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Cloud-IDE-JWT ' + TOKEN},
+      body: JSON.stringify({require_usage: true}),
+    });
+    if (!r.ok) return {error: 'http_' + r.status};
+    const j = await r.json();
+    const s = j.usage_summary || {};
+    const total = Number(s.total_amount) || 0;
+    const consumed = Number(s.consumed_amount) || 0;
+    return {
+      ok: true,
+      remaining: total - consumed,
+      consumed: consumed,
+      total: total,
+      ratio: Number(s.consumption_ratio) || 0,
+      isCreditsBilling: !!j.is_credits_billing,
+      packsCount: (j.user_entitlement_pack_list || []).length,
+    };
+  } catch (e) {
+    return {error: String(e.message || e)};
+  }
+})()"""
+
+TRAE_PROBE_JS = """(() => {
+  const out = { global: {}, dom: [] };
+  const cut = (value) => { try { return JSON.stringify(value).slice(0, 20000); } catch (e) { return null; } };
+  try {
+    if (typeof ICubeRemote !== 'undefined' && ICubeRemote) out.global.remote = cut(ICubeRemote.globals);
+    if (typeof icubeWorkspace !== 'undefined' && icubeWorkspace) {
+      out.global.workspace = cut({ id: icubeWorkspace.id, activeAIPanel: icubeWorkspace.activeAIPanel });
+    }
+  } catch (e) {}
+  try {
+    const root = document.body || document.documentElement;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode()) && out.dom.length < 60) {
+      const text = (node.textContent || '').trim();
+      if (!text || text.length > 120) continue;
+      if (/积分|余额|剩余|credits?/i.test(text) || /^[\\d,]+(?:\\.\\d+)?$/.test(text)) out.dom.push(text);
+    }
+  } catch (e) {}
+  return out;
+})()"""
+
+
+def _trae_cdp_http(path, port=TRAE_CDP_PORT, timeout=2.0):
+    """CDP 端口只听 127.0.0.1；系统代理会劫持 localhost 请求，必须显式绕过。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open("http://127.0.0.1:%d%s" % (port, path), timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def trae_cdp_number(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        num = float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    if 0 < num < TRAE_CDP_NUMBER_MAX:
+        return round(num, 2)
+    return None
+
+
+def trae_remaining_from_json(data):
+    """在任意结构里按键名找余额；键名取自客户端真实接口的 remaining/balance 字段。"""
+    keywords = ("remaining", "remain", "balance", "left_quota", "leftquota", "rest_credits")
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                lowered = str(key).lower()
+                if any(word in lowered for word in keywords):
+                    found = trae_cdp_number(value)
+                    if found is not None:
+                        return found
+                found = walk(value)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = walk(item)
+                if found is not None:
+                    return found
+        return None
+    return walk(data)
+
+
+def trae_remaining_from_text(text):
+    """全局对象可能不是合法 JSON，退化为正则扫序列化文本。"""
+    if not isinstance(text, str):
+        return None
+    match = re.search(
+        r"\"(?:[A-Za-z_]*)(?:remaining|balance|leftQuota)(?:[A-Za-z_]*)\"\s*:\s*\"?(-?[\d,]+(?:\.\d+)?)\"?",
+        text,
+    )
+    if match:
+        return trae_cdp_number(match.group(1))
+    return None
+
+
+def trae_remaining_from_dom(hits):
+    """面板文本取数：「X / Y」优先取 X；带积分字样的行取行内最大数；裸数字行兜底取最大。"""
+    if not isinstance(hits, list):
+        return None
+    labelled = []
+    standalone = []
+    for text in hits:
+        if not isinstance(text, str):
+            continue
+        pair = re.search(r"([\d,]+(?:\.\d+)?)\s*/\s*([\d,]+(?:\.\d+)?)", text)
+        if pair:
+            found = trae_cdp_number(pair.group(1))
+            if found is not None:
+                return found
+        if re.search(r"积分|余额|剩余|credits?", text, re.IGNORECASE):
+            for match in re.finditer(r"([\d,]+(?:\.\d+)?)", text):
+                found = trae_cdp_number(match.group(1))
+                if found is not None:
+                    labelled.append(found)
+        elif re.fullmatch(r"[\d,]+(?:\.\d+)?", text):
+            found = trae_cdp_number(text)
+            if found is not None:
+                standalone.append(found)
+    if labelled:
+        return max(labelled)
+    if standalone:
+        return max(standalone)
+    return None
+
+
+def trae_remaining_from_probe(probe):
+    if not isinstance(probe, dict):
+        return None
+    for value in (probe.get("global") or {}).values():
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            found = trae_remaining_from_json(json.loads(value))
+        except (ValueError, TypeError):
+            found = None
+        if found is None:
+            found = trae_remaining_from_text(value)
+        if found is not None:
+            return found
+    return trae_remaining_from_dom(probe.get("dom"))
+
+
+class TraeCDP:
+    """单页面 CDP 连接；websocket-client 缺失或连不上时由调用方降级到日志采集。"""
+
+    def __init__(self, target, timeout=5.0):
+        import websocket
+
+        self._ws = websocket.create_connection(
+            target["webSocketDebuggerUrl"], timeout=timeout, suppress_origin=True
+        )
+        self._next_id = 0
+
+    def close(self):
+        try:
+            self._ws.close()
+        except Exception:
+            pass
+
+    def call(self, method, params=None, timeout=5.0):
+        self._next_id += 1
+        message_id = self._next_id
+        self._ws.send(json.dumps({"id": message_id, "method": method, "params": params or {}}))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._ws.settimeout(max(0.2, deadline - time.time()))
+            try:
+                raw = self._ws.recv()
+            except Exception:
+                return None
+            try:
+                message = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(message, dict) and message.get("id") == message_id:
+                return message
+        return None
+
+    def evaluate(self, expression, timeout=5.0, await_promise=False):
+        response = self.call(
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True, "awaitPromise": await_promise},
+            timeout=timeout,
+        )
+        try:
+            return response["result"]["result"].get("value")
+        except (TypeError, KeyError, AttributeError):
+            return None
+
+    def listen_pay_responses(self, seconds):
+        """短暂监听 pay/* 响应体。轮询周期是 1-2 分钟，这一层多数时候赶不上，仅作兜底。"""
+        from websocket import WebSocketTimeoutException
+
+        if self.call("Network.enable", {}, timeout=3.0) is None:
+            return None
+        pending = set()
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            self._ws.settimeout(max(0.3, min(1.0, deadline - time.time())))
+            try:
+                raw = self._ws.recv()
+            except WebSocketTimeoutException:
+                continue
+            except Exception:
+                return None
+            try:
+                message = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(message, dict):
+                continue
+            method = message.get("method") or ""
+            params = message.get("params") or {}
+            if method == "Network.responseReceived":
+                url = ((params.get("response") or {}).get("url")) or ""
+                if re.search(r"pay/|usage|credit", url):
+                    pending.add(params.get("requestId"))
+            elif method == "Network.loadingFinished" and params.get("requestId") in pending:
+                pending.discard(params.get("requestId"))
+                body = self.call("Network.getResponseBody", {"requestId": params["requestId"]}, timeout=3.0)
+                try:
+                    payload = (body or {}).get("result", {}).get("body") or ""
+                    if (body or {}).get("result", {}).get("base64Encoded"):
+                        payload = base64.b64decode(payload).decode("utf-8", "replace")
+                    found = trae_remaining_from_json(json.loads(payload))
+                except (ValueError, TypeError):
+                    found = trae_remaining_from_text(payload if isinstance(payload, str) else None)
+                if found is not None:
+                    return found
+        return None
+
+
+def trae_cdp_targets(port=TRAE_CDP_PORT):
+    try:
+        data = _trae_cdp_http("/json/list", port)
+    except Exception:
+        return []
+    pages = [
+        target for target in data
+        if isinstance(target, dict)
+        and target.get("type") == "page"
+        and target.get("webSocketDebuggerUrl")
+    ]
+    # 积分界面在工作台页面里；找不到再退回全部页面（调试窗口之类误伤面已由解析层过滤）。
+    workbench = [
+        target for target in pages
+        if "workbench" in (target.get("url") or "") or (target.get("title") or "") == "Agent"
+    ]
+    return (workbench or pages)[:TRAE_CDP_MAX_TARGETS]
+
+
+def trae_cdp_fetch_api(port=TRAE_CDP_PORT):
+    """通过 CDP 在 Trae 渲染进程里调 fetch 拿完整 usage 数据。
+
+    Trae 的 API（ide_user_ent_usage）做了 TLS/JA3 指纹校验，
+    只有 Trae 自己进程里的 fetch（Chromium 网络栈）能通。
+    这里让 collector 通过 CDP 在渲染进程里执行 fetch，
+    完全复用 Trae 自己的网络栈和鉴权上下文。
+    """
+    if not TRAE_JWT_TOKEN_PATH.is_file():
+        return None
+    token = TRAE_JWT_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    if not token:
+        return None
+    targets = trae_cdp_targets(port)
+    if not targets:
+        return None
+    for target in targets:
+        try:
+            cdp = TraeCDP(target, timeout=15.0)
+        except Exception:
+            continue
+        try:
+            js = TRAE_FETCH_API_JS % (json.dumps(token), TRAE_API_URL)
+            result = cdp.evaluate(js, timeout=15.0, await_promise=True)
+        except Exception:
+            continue
+        finally:
+            cdp.close()
+        if not isinstance(result, dict) or not result.get("ok"):
+            continue
+        remaining = trae_cdp_number(result.get("remaining"))
+        if remaining is None:
+            continue
+        return {
+            "remaining": remaining,
+            "consumed": trae_cdp_number(result.get("consumed")),
+            "total": trae_cdp_number(result.get("total")),
+            "ratio": trae_cdp_number(result.get("ratio")),
+            "is_credits_billing": result.get("isCreditsBilling"),
+            "packs_count": result.get("packsCount"),
+        }
+    return None
+
+
+def trae_collect_cdp(port=TRAE_CDP_PORT):
+    """实时取余额；端口没开、页面拿不到数都返回 None，调用方退回日志。
+
+    优先走 fetch API（完整数据、实时、可靠），
+    拿不到再降级到旧的三层兜底（DOM 探测 + Network 监听）。
+    """
+    # 主路径：fetch API
+    result = trae_cdp_fetch_api(port)
+    if result is not None:
+        return result
+
+    # 降级：旧的三层兜底（兼容没有 fetch API 或 token 不可用的极端情况）
+    targets = trae_cdp_targets(port)
+    if not targets:
+        return None
+    for target in targets:
+        try:
+            cdp = TraeCDP(target)
+        except Exception:
+            continue
+        try:
+            found = trae_remaining_from_probe(cdp.evaluate(TRAE_PROBE_JS))
+            if found is not None:
+                return {"remaining": found}
+        except Exception:
+            continue
+        finally:
+            cdp.close()
+    for target in targets:
+        if "workbench" not in (target.get("url") or "") and (target.get("title") or "") != "Agent":
+            continue
+        try:
+            cdp = TraeCDP(target, timeout=10.0)
+        except Exception:
+            continue
+        try:
+            found = cdp.listen_pay_responses(TRAE_CDP_NETWORK_WAIT)
+            if found is not None:
+                return found
+        except Exception:
+            continue
+        finally:
+            cdp.close()
+        break
+    return None
+
+
+def trae_cdp_restart() -> dict:
+    """退出 Trae 并带调试端口重启。Trae 是 VS Code 系，会自动恢复窗口。"""
+    app_path = "/Applications/Trae CN.app"
+    binary_hint = app_path + "/Contents/MacOS/Electron"
+    running = lambda: subprocess.run(
+        ["pgrep", "-f", binary_hint], capture_output=True
+    ).returncode == 0
+    if running():
+        try:
+            subprocess.run(["osascript", "-e", 'quit app "Trae CN"'], capture_output=True, timeout=15)
+        except Exception as exc:
+            return fail("无法退出 Trae：" + str(exc))
+        deadline = time.time() + 15
+        while running() and time.time() < deadline:
+            time.sleep(0.5)
+        if running():
+            return fail("Trae 未能退出，请手动退出后重试")
+    try:
+        launch = subprocess.run(
+            ["open", "-a", app_path, "--args", "--remote-debugging-port=%d" % TRAE_CDP_PORT],
+            capture_output=True, timeout=15,
+        )
+    except Exception as exc:
+        return fail("无法启动 Trae：" + str(exc))
+    if launch.returncode != 0:
+        return fail("无法启动 Trae：" + (launch.stderr or b"").decode("utf-8", "replace").strip()[:200])
+    deadline = time.time() + 40
+    while time.time() < deadline:
+        try:
+            _trae_cdp_http("/json/version", timeout=1.5)
+            return {"ok": True, "message": "Trae 已带实时采集端口重启，稍后自动刷新余额"}
+        except Exception:
+            time.sleep(1)
+    return fail("Trae 已重启，但调试端口未就绪；请确认 Trae 正常启动后重试")
+
+
 def collect_trae() -> dict:
+    now = int(time.time())
+    # 实时优先：调试端口在线就能通过 fetch API 拿到完整 usage 数据。
+    if TRAE_CDP_ENABLED:
+        live = trae_collect_cdp()
+        if live is not None:
+            if isinstance(live, dict):
+                remaining = live.get("remaining")
+                consumed = live.get("consumed")
+                total = live.get("total")
+                if remaining is not None:
+                    return {
+                        "ok": True,
+                        # API 无套餐名字段（个人版权益包只有签到/福利类），Trae UI 右上角的
+                        # Free 来自独立用户中心接口，这里直接按个人版标注
+                        "plan": "Free",
+                        "remaining": round(float(remaining), 2),
+                        "used": round(float(consumed), 2) if consumed is not None else None,
+                        # consumed_amount 是整个积分包周期的累计用量（API 无今日口径字段）
+                        "usedScope": "cumulative",
+                        "total": round(float(total), 2) if total is not None else None,
+                        "usedPercent": round(float(live.get("ratio", 0)) * 100, 2) if live.get("ratio") is not None else None,
+                        "unit": "credits",
+                        "source": "trae-api",
+                        "updatedAt": now,
+                        "collectedAt": now,
+                        "stale": False,
+                    }
+            # 旧三层兜底只返回余额数值或 {"remaining": ...}
+            remaining = float(live) if isinstance(live, (int, float)) else live.get("remaining")
+            if remaining is not None:
+                return {
+                    "ok": True,
+                    "plan": "unknown",
+                    "remaining": round(remaining, 2),
+                    "unit": "credits",
+                    "source": "trae-cdp",
+                    "updatedAt": now,
+                    "collectedAt": now,
+                    "stale": False,
+                }
     files = trae_log_files()
     if not files:
         return fail("未找到 Trae 日志，请先打开 Trae 并登录")
-    now = int(time.time())
     for path in files[:TRAE_LOG_FILES_LIMIT]:
         credit = trae_scan_file(path)
         if credit is None:
@@ -1012,13 +1467,18 @@ def collect_trae() -> dict:
             continue
         # 积分是余额而不是周期额度，所以只有 remaining、没有 total/usedPercent；
         # 时间戳用日志里那条记录的时刻，重复采集同一个余额不会被算成「没消耗」。
+        # collectedAt 是本次采集时刻；stale 表示这条余额已经超过 6 小时没动过，
+        # 客户端可能在消耗后不再写日志（3.4.17 实测），页面要提示「数据可能过期」。
+        stamp = epoch if epoch is not None else now
         return {
             "ok": True,
             "plan": "unknown",
             "remaining": round(remaining, 2),
             "unit": "credits",
             "source": "trae-log",
-            "updatedAt": epoch if epoch is not None else now,
+            "updatedAt": stamp,
+            "collectedAt": now,
+            "stale": now - stamp > TRAE_STALE_SECONDS,
         }
     return fail("Trae 日志里还没有积分记录，请在 Trae 里打开一次额度面板")
 
@@ -1053,6 +1513,7 @@ QODER_ACTIONS = {
     "qoder-install": qoder_install,
     "qoder-login": qoder_login_start,
     "qoder-login-status": qoder_login_status,
+    "trae-cdp-restart": trae_cdp_restart,
 }
 
 

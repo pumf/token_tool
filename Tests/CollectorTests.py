@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -86,6 +87,7 @@ def test_qoder_plan_and_addon():
     expect_equal(payload["remaining"], 2550.0, "剩余按两包合计")
     expect_equal(payload["usedPercent"], 15.0, "已用百分比")
     expect_equal(payload["orgResourcePackage"], "剩余1,800/2,000", "组织资源包原样带出")
+    expect_equal(payload["usedScope"], "cumulative", "Qoder 的 used 是累计口径，不是今日消耗")
 
 
 def test_qoder_variants():
@@ -327,6 +329,65 @@ def test_collect_trae():
             expect_equal(collector.collect_trae()["ok"], False, "只有负数余额时不采信")
     finally:
         collector.TRAE_LOG_ROOT = original
+
+
+def trae_stamp(hours_ago):
+    moment = datetime.now().astimezone() - timedelta(hours=hours_ago)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.000%z")
+
+
+def test_collect_trae_stale():
+    original = collector.TRAE_LOG_ROOT
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            collector.TRAE_LOG_ROOT = Path(root)
+            # 客户端 7 小时没再写积分行：余额按「可能过期」上报，采集时刻单独给一份。
+            write_trae_log(root, "s", "window1", trae_line(1200, stamp=trae_stamp(7)), mtime=1000)
+            result = collector.collect_trae()
+            expect_equal(result["stale"], True, "超过 6 小时没动的余额标记可能过期")
+            expect_equal(result["remaining"], 1200.0, "过期标记不改变余额取值")
+            check(isinstance(result["collectedAt"], int), "collectedAt 是本次采集时刻")
+            check(
+                result["collectedAt"] - result["updatedAt"] > 6 * 3600,
+                "updatedAt 仍是日志时刻，与采集时刻拉开差距",
+            )
+
+            # 半小时前刚写过的积分行：照常当新鲜数据处理。
+            write_trae_log(root, "s2", "window1", trae_line(1180, stamp=trae_stamp(0.5)), mtime=time.time())
+            result = collector.collect_trae()
+            expect_equal(result["stale"], False, "刚动过的余额不标过期")
+            expect_equal(result["remaining"], 1180.0, "余额取最新日志")
+    finally:
+        collector.TRAE_LOG_ROOT = original
+
+
+def test_trae_cdp_parse():
+    """CDP 实时采集的纯解析层：数字清洗、结构/文本/DOM 三路找余额。"""
+    expect_equal(collector.trae_cdp_number("4,671.37"), 4671.37, "带千分位的字符串余额")
+    expect_equal(collector.trae_cdp_number(-5), None, "负数不是有效余额")
+    expect_equal(collector.trae_cdp_number(True), None, "布尔值不当作余额")
+    expect_equal(collector.trae_cdp_number(99_999_999), None, "离谱量级不采信")
+
+    payload = {"data": {"usage": [{"remainingCredits": "4,671.37", "total": 5000}]}}
+    expect_equal(collector.trae_remaining_from_json(payload), 4671.37, "嵌套结构里找到 remaining 键")
+    expect_equal(collector.trae_remaining_from_json({"foo": "bar"}), None, "无关结构返回空")
+
+    expect_equal(
+        collector.trae_remaining_from_text('{"x":1,"balance":"3,200"}'),
+        3200.0,
+        "非 JSON 文本里正则扫 balance",
+    )
+    expect_equal(collector.trae_remaining_from_text("no numbers here"), None, "无余额字样的文本返回空")
+
+    expect_equal(collector.trae_remaining_from_dom(["4,671.37 / 5,000.00"]), 4671.37, "X / Y 取左侧余额")
+    expect_equal(collector.trae_remaining_from_dom(["剩余积分", "4,671.37"]), 4671.37, "积分行内取数")
+    expect_equal(collector.trae_remaining_from_dom(["4,600", "113"]), 4600.0, "裸数字取最大")
+    expect_equal(collector.trae_remaining_from_dom(["无数字"]), None, "没有数字返回空")
+
+    probe = {"global": {"workspace": '{"activeAIPanel":{"remaining":4600}}'}, "dom": ["999"]}
+    expect_equal(collector.trae_remaining_from_probe(probe), 4600.0, "全局对象优先于 DOM 文本")
+    expect_equal(collector.trae_remaining_from_probe({"dom": ["2,000 / 3,000"]}), 2000.0, "全局为空时退回 DOM")
+    expect_equal(collector.trae_remaining_from_probe(None), None, "探测结果缺失不抛错")
 
 
 def main():

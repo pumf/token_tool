@@ -21,7 +21,18 @@ struct UsageInput: Sendable {
     let remaining: Double?
     let total: Double?
     let remainingPercent: Double?
+    /// Provider 直接上报的今日消耗绝对值（如 Trae API 的 consumed_amount）。
+    /// 有这个值时优先用它算今日消耗，不再从 history 差分。
+    let consumed: Double?
     let windows: [UsageWindow]
+
+    init(remaining: Double?, total: Double?, remainingPercent: Double?, consumed: Double? = nil, windows: [UsageWindow]) {
+        self.remaining = remaining
+        self.total = total
+        self.remainingPercent = remainingPercent
+        self.consumed = consumed
+        self.windows = windows
+    }
 }
 
 struct WindowUsageSample: Codable, Sendable {
@@ -233,7 +244,47 @@ enum UsageAnalytics {
             }
         }
         points.sort { $0.at < $1.at }
-        guard points.count >= 2, let first = points.first, let last = points.last else { return nil }
+
+        // 剔除假跌段：连续若干拍跌掉一半以上、随后又弹回九成以上的样本，是采集器
+        // 抓到的垃圾值（页面重载间隙兜底探针抓错，可能连着几拍）。差分前整段丢掉，
+        // 否则假跌计入消耗、弹回计入 reclaimed，昨日用量会被撑爆。
+        if points.count >= 3 {
+            var cleaned: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
+            cleaned.reserveCapacity(points.count)
+            var index = 0
+            while index < points.count {
+                if let baseline = cleaned.last?.value, points[index].value < baseline * 0.5 {
+                    var end = index
+                    while end < points.count, points[end].value < baseline * 0.5 { end += 1 }
+                    if end < points.count, points[end].value > baseline * 0.9 {
+                        index = end
+                        continue
+                    }
+                }
+                cleaned.append(points[index])
+                index += 1
+            }
+            points = cleaned
+        }
+
+        // credits 类 provider（Trae 等）如果直接上报了今日消耗绝对值，
+        // 直接用它当今日消耗——不依赖 history 差分，避免样本不足时不准。
+        let providerTodayConsumed = (provider.quotaKind == .credits) ? input.consumed : nil
+
+        guard points.count >= 2, let first = points.first, let last = points.last else {
+            // 样本不够但 provider 给了 consumed，照样返回 todayConsumed
+            if let value = providerTodayConsumed {
+                return UsageInsight(
+                    todayConsumed: value,
+                    yesterdayConsumed: nil,
+                    dailyAverage: nil,
+                    netDailyAverage: nil,
+                    observedDays: 0,
+                    isPercent: provider.isPercent
+                )
+            }
+            return nil
+        }
 
         var totalConsumed: Double = 0
         var totalReclaimed: Double = 0
@@ -292,8 +343,12 @@ enum UsageAnalytics {
         let yesterdayLength = todayStart - yesterdayStart
         let hasYesterday = yesterdayLength > 0 && yesterdayCovered >= yesterdayLength * 0.9
 
+        // credits 类 provider 给了 consumed 时，覆盖差分算出来的 todayConsumed。
+        // dailyAverage/netDailyAverage 这类长期指标仍走 history 差分（provider 只给今日消耗）。
+        let finalToday = providerTodayConsumed ?? (hasTodayPair ? todayConsumed : nil)
+
         return UsageInsight(
-            todayConsumed: hasTodayPair ? todayConsumed : nil,
+            todayConsumed: finalToday,
             yesterdayConsumed: hasYesterday ? yesterdayConsumed : nil,
             dailyAverage: dailyAverage,
             netDailyAverage: netDailyAverage,

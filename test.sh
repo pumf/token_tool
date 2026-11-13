@@ -19,4 +19,4 @@ swiftc -Onone -parse-as-library \
 ./build/TokenToolTests
 
 # collector.py 只测解析层：喂固定文本，不启动任何 CLI 或本机 IPC。
-python3 Tests/CollectorTests.py
+TOKENTOOL_DISABLE_CDP=1 python3 Tests/CollectorTests.py

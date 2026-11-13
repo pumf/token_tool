@@ -192,6 +192,7 @@ final class UsageStore: ObservableObject {
             }
         }
         scheduleTimers()
+        startTraeAutoWatch()
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -663,8 +664,16 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    enum TraeLivePhase: Equatable {
+        case idle
+        case restarting
+    }
+
     @Published private(set) var qoderSetup: QoderSetupPhase = .idle
     private var loginPoll: Task<Void, Never>?
+
+    /// Trae 实时采集的重启流程进行中时置位，卡片链接随之显示「重启中」。
+    @Published private(set) var traeLivePhase: TraeLivePhase = .idle
 
     func installQoderCLI() {
         guard !qoderSetup.isBusy else { return }
@@ -714,6 +723,106 @@ final class UsageStore: ObservableObject {
         loginPoll?.cancel()
         loginPoll = nil
         qoderSetup = .idle
+    }
+
+    // MARK: - Trae 实时采集自动跟随
+
+    /// 已处理过的 Trae 主进程 PID：无论端口是否带上，一个进程只自动处理一次，防止反复重启。
+    private var handledTraePid: Int?
+
+    private func startTraeAutoWatch() {
+        let persisted = UserDefaults.standard.integer(forKey: "trae.autoHandledPid")
+        handledTraePid = persisted == 0 ? nil : persisted
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            // Timer 挂在主 RunLoop 上，闭包已在主线程，跳回 MainActor 消除隔离警告
+            Task { @MainActor in self?.checkTraeAutoLive() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        checkTraeAutoLive()
+    }
+
+    /// Trae 刚启动（<60 秒）且未带调试端口时自动重启补上端口；
+    /// 已运行较久的进程不动——那时用户可能正跑着 agent 会话，交给手动按钮。
+    private func checkTraeAutoLive() {
+        guard traeLivePhase == .idle else { return }
+        guard let trae = Self.traeMainProcess() else { return }
+        let pid = trae.pid
+        guard pid != handledTraePid else { return }
+        handledTraePid = pid
+        UserDefaults.standard.set(pid, forKey: "trae.autoHandledPid")
+        if trae.command.contains("--remote-debugging-port") {
+            Diagnostics.record("trae-live", "Trae（PID \(pid)）已带调试端口，实时采集可用")
+            return
+        }
+        guard trae.uptimeSeconds < 60 else {
+            Diagnostics.record("trae-live", "Trae（PID \(pid)）已运行较久未带调试端口，跳过自动重启（可在卡片手动启用）")
+            return
+        }
+        runTraeRestart(reason: "检测到 Trae 刚启动未带调试端口，自动跟随")
+    }
+
+    private func runTraeRestart(reason: String) {
+        guard traeLivePhase == .idle else { return }
+        traeLivePhase = .restarting
+        Diagnostics.record("trae-live", "开始重启 Trae：\(reason)")
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = CollectorRunner.action("trae-cdp-restart", timeout: 90)
+            guard let self else { return }
+            await MainActor.run {
+                self.traeLivePhase = .idle
+                if let error = result.error {
+                    self.setError(error, for: .trae)
+                    return
+                }
+                self.refresh([.trae])
+            }
+        }
+    }
+
+    private struct TraeProcess {
+        let pid: Int
+        let command: String
+        let uptimeSeconds: Int
+    }
+
+    /// Trae 主进程（过滤掉带 --type= 的 Electron 子进程）。
+    private static func traeMainProcess() -> TraeProcess? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["axo", "pid=,etime=,command="]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.components(separatedBy: "\n") {
+            guard line.contains("Trae CN.app/Contents/MacOS/Electron"),
+                  !line.contains("--type=") else { continue }
+            let parts = line.trimmingCharacters(in: .whitespaces)
+                .components(separatedBy: .whitespaces)
+            guard parts.count >= 3,
+                  let pid = Int(parts[0]) else { continue }
+            // etime 形如 mm:ss / hh:mm:ss / dd-hh:mm:ss
+            var seconds = 0
+            let etime = parts[1]
+            let daySplit = etime.split(separator: "-")
+            if daySplit.count == 2, let days = Int(daySplit[0]) {
+                seconds += days * 86400
+            }
+            let chunks = (daySplit.last ?? Substring(etime)).split(separator: ":")
+            for chunk in chunks {
+                seconds = seconds * 60 + (Int(chunk) ?? 0)
+            }
+            let command = parts[2...].joined(separator: " ")
+            return TraeProcess(pid: pid, command: command, uptimeSeconds: seconds)
+        }
+        return nil
     }
 
     private func pollQoderLogin() {
@@ -930,6 +1039,9 @@ final class UsageStore: ObservableObject {
             remaining: result.remaining,
             total: result.total,
             remainingPercent: result.remainingPercent,
+            // 采集器给的 used 都是累计口径（Trae/WorkBuddy/Qoder API 无今日分解），
+            // 今日消耗一律交给 history 差分推导。
+            consumed: result.usedScope == "today" ? result.used : nil,
             windows: (result.windows ?? []).compactMap { window in
                 guard let minutes = window.windowMinutes,
                       let remaining = window.remainingPercent else { return nil }
