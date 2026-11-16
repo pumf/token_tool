@@ -289,6 +289,10 @@ struct ProviderCard<Detail: View>: View {
     let compact: Bool
     /// 非空时在卡片右上角画一个抓手，拖动它交换卡片顺序。
     let dragPayload: (() -> NSItemProvider)?
+    /// 双击卡片空白处触发的动作（打开对应客户端）；nil 时卡片不响应双击。
+    let onDoubleClick: (() -> Void)?
+    /// 有双击动作时在卡片上给出的悬停提示，负责「双击可打开」的可发现性。
+    let doubleClickHint: String?
     let detail: Detail
 
     init(
@@ -305,6 +309,8 @@ struct ProviderCard<Detail: View>: View {
         links: [ProviderLink] = [],
         compact: Bool = false,
         dragPayload: (() -> NSItemProvider)? = nil,
+        onDoubleClick: (() -> Void)? = nil,
+        doubleClickHint: String? = nil,
         @ViewBuilder detail: () -> Detail
     ) {
         self.title = title
@@ -320,6 +326,8 @@ struct ProviderCard<Detail: View>: View {
         self.links = links
         self.compact = compact
         self.dragPayload = dragPayload
+        self.onDoubleClick = onDoubleClick
+        self.doubleClickHint = doubleClickHint
         self.detail = detail()
     }
 
@@ -445,6 +453,8 @@ struct ProviderCard<Detail: View>: View {
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
         )
+        .contentShape(RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous))
+        .modifier(DoubleClickOpen(action: onDoubleClick, hint: doubleClickHint))
     }
 
     private var linksRow: some View {
@@ -473,6 +483,26 @@ struct ProviderCard<Detail: View>: View {
             }
         }
         .frame(height: 20)
+    }
+}
+
+/// 双击卡片打开对应客户端：只有给了动作才挂双击手势，避免无动作的卡片凭空吞掉点击；
+/// 有动作时再附一条悬停提示，负责「双击可打开」的可发现性。
+private struct DoubleClickOpen: ViewModifier {
+    let action: (() -> Void)?
+    let hint: String?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let action {
+            if let hint {
+                content.onTapGesture(count: 2, perform: action).help(hint)
+            } else {
+                content.onTapGesture(count: 2, perform: action)
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -1265,7 +1295,10 @@ struct MenuContent: View {
         .frame(height: 30)
         .padding(.horizontal, Token.spaceRow)
         .contentShape(Rectangle())
-        .help("\(descriptor.displayName) · \(minimalCaption(provider)) · \(cardFooter(provider))")
+        .onTapGesture(count: 2) {
+            Apps.open(bundleID: descriptor.clientBundleID, fallback: descriptor.clientAppPath)
+        }
+        .help("\(descriptor.displayName) · \(minimalCaption(provider)) · \(cardFooter(provider)) · 双击打开 \(descriptor.clientName)")
     }
 
     /// 有分母的一家画剩余量胶囊；只有余额的一家（Trae）没有分母，改画近 7 天迷你趋势。
@@ -1447,7 +1480,11 @@ struct MenuContent: View {
             footer: cardFooter(provider),
             links: cardLinks(provider),
             compact: store.simpleMode,
-            dragPayload: { NSItemProvider(object: provider.rawValue as NSString) }
+            dragPayload: { NSItemProvider(object: provider.rawValue as NSString) },
+            onDoubleClick: {
+                Apps.open(bundleID: descriptor.clientBundleID, fallback: descriptor.clientAppPath)
+            },
+            doubleClickHint: "双击打开 \(descriptor.clientName)"
         ) {
             providerContent(provider)
         }
