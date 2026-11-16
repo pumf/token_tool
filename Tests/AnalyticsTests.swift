@@ -794,7 +794,7 @@ struct AnalyticsSuite {
                     check(false, "Claude Code 不该有每日领取提醒")
                 case .trae:
                     expectEqual(hour, 0)
-                    expectEqual(grant, "100 积分")
+                    expectEqual(grant, "100 额度")
                 }
             }
         }

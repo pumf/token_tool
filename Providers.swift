@@ -196,7 +196,7 @@ enum Providers {
             clientHelp: "打开 Trae CN",
             websiteURL: "https://www.trae.cn",
             websiteHelp: "打开 Trae 官网",
-            claimReminder: .daily(hour: 0, grant: "100 积分", body: "打开 Trae 领取今日积分。"),
+            claimReminder: .daily(hour: 0, grant: "100 额度", body: "打开 Trae 完成每日签到，领取 100 额度。"),
             reminderDefaultsKey: "reminder.trae.claim",
             menuBarDefaultsKey: "menuBar.trae",
             refreshOnPanelOpen: false,
