@@ -94,6 +94,9 @@ enum CollectorRunner {
         // 否则秒退的子进程可能错过信号。
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
+        // 进程组建组由 collector.py 自己 os.setpgrp() 完成（父侧 setpgid 与 exec 存在竞态），
+        // 超时收尸时连 osascript/open/qoderclicn 等孙进程一起清掉。
+        process.qualityOfService = .userInitiated
         do {
             try process.run()
             didLaunch = true
@@ -116,16 +119,20 @@ enum CollectorRunner {
         return .success(data)
     }
 
-    /// 先 TERM、再 KILL，最后 waitUntilExit 收尸；重复调用安全。
+    /// 先 TERM、再 KILL 整个进程组（setpgid 后 python3 及其 osascript/open 孙进程同组），
+    /// 最后 waitUntilExit 收尸；重复调用安全。
     private static func reap(_ process: Process) {
+        let pid = process.processIdentifier
         if process.isRunning {
-            process.terminate()
+            Darwin.kill(-pid, SIGTERM)
             Thread.sleep(forTimeInterval: 0.3)
             if process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
+                Darwin.kill(-pid, SIGKILL)
             }
         }
         process.waitUntilExit()
+        // 进程组里可能还有已脱离 isRunning 判断的幸存成员，补一发兜底。
+        Darwin.kill(-pid, SIGKILL)
     }
 
     private static func readTail(of url: URL, bytes: Int) -> String {

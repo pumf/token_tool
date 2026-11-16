@@ -15,8 +15,10 @@ enum Diagnostics {
 
     /// 一条事件：`category` 是固定短词（collector/history/alert/update），`detail` 是自由文本。
     static func record(_ category: String, _ detail: String) {
-        let line = "\(timestamp()) \(category) \(sanitize(detail))\n"
-        osLog.log("\(detail, privacy: .public)")
+        let clean = sanitize(detail)
+        let line = "\(timestamp()) \(category) \(clean)\n"
+        // 统一日志是系统级可读的，必须与文件行一样用脱敏后的文本，不能打原始 detail。
+        osLog.log("\(clean, privacy: .public)")
         queue.async {
             append(line)
         }

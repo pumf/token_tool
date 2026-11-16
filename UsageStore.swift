@@ -198,7 +198,15 @@ final class UsageStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshAll() }
+            Task { @MainActor in self?.refreshAll(force: false) }
+        }
+        // 正常退出时把节流中的 history 立即落盘，避免白丢最后几分钟的样本。
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushHistoryNow()
         }
     }
 
@@ -603,10 +611,11 @@ final class UsageStore: ObservableObject {
         apply(result, to: target.provider)
     }
 
-    /// 手动刷新与唤醒都强制采集一次，忽略退避窗口。
-    func refreshAll() {
+    /// 手动刷新强制采集一次；唤醒默认尊重退避窗口——环境类故障（python3 缺失等）
+    /// 若已被退避，每次唤醒都强开五个必败子进程只会白烧 CPU。
+    func refreshAll(force: Bool = true) {
         for group in Self.groups {
-            refresh(group.providers, force: true)
+            refresh(group.providers, force: force)
         }
     }
 
@@ -672,7 +681,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var qoderSetup: QoderSetupPhase = .idle
     private var loginPoll: Task<Void, Never>?
 
-    /// Trae 实时采集的重启流程进行中时置位，卡片链接随之显示「重启中」。
+    /// Trae 重启流程的互斥标记：进行中不允许再触发第二次重启（内部状态，不直接驱动 UI）。
     @Published private(set) var traeLivePhase: TraeLivePhase = .idle
 
     func installQoderCLI() {
@@ -730,38 +739,49 @@ final class UsageStore: ObservableObject {
     /// 已处理过的 Trae 主进程 PID：无论端口是否带上，一个进程只自动处理一次，防止反复重启。
     private var handledTraePid: Int?
 
+    /// 自动重启连续失败的熔断计数：重启失败后新 PID 又满足条件会形成循环重启，
+    /// 连续失败 2 次就停用自动跟随，等下次「带端口启动成功」再复位。
+    private var traeAutoFailures = 0
+
     private func startTraeAutoWatch() {
         let persisted = UserDefaults.standard.integer(forKey: "trae.autoHandledPid")
         handledTraePid = persisted == 0 ? nil : persisted
         let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
-            // Timer 挂在主 RunLoop 上，闭包已在主线程，跳回 MainActor 消除隔离警告
-            Task { @MainActor in self?.checkTraeAutoLive() }
+            guard let self else { return }
+            // Timer 挂在主 RunLoop 上，闭包已在主线程；跳回 MainActor 消除隔离警告
+            Task { @MainActor [weak self] in await self?.checkTraeAutoLive() }
         }
         RunLoop.main.add(timer, forMode: .common)
-        checkTraeAutoLive()
+        Task { @MainActor [weak self] in await self?.checkTraeAutoLive() }
     }
 
     /// Trae 刚启动（<60 秒）且未带调试端口时自动重启补上端口；
-    /// 已运行较久的进程不动——那时用户可能正跑着 agent 会话，交给手动按钮。
-    private func checkTraeAutoLive() {
+    /// 已运行较久的进程不动——那时用户可能正跑着 agent 会话，留给手动处理。
+    private func checkTraeAutoLive() async {
         guard traeLivePhase == .idle else { return }
-        guard let trae = Self.traeMainProcess() else { return }
+        guard traeAutoFailures < 2 else { return }
+        // ps 探测放后台线程：readDataToEndOfFile 是同步阻塞调用，主线程跑会卡 UI
+        let probe = Task.detached(priority: .utility) { () -> TraeProcess? in
+            Self.traeMainProcess()
+        }
+        guard let trae = await probe.value else { return }
         let pid = trae.pid
         guard pid != handledTraePid else { return }
         handledTraePid = pid
         UserDefaults.standard.set(pid, forKey: "trae.autoHandledPid")
         if trae.command.contains("--remote-debugging-port") {
+            traeAutoFailures = 0
             Diagnostics.record("trae-live", "Trae（PID \(pid)）已带调试端口，实时采集可用")
             return
         }
         guard trae.uptimeSeconds < 60 else {
-            Diagnostics.record("trae-live", "Trae（PID \(pid)）已运行较久未带调试端口，跳过自动重启（可在卡片手动启用）")
+            Diagnostics.record("trae-live", "Trae（PID \(pid)）已运行较久未带调试端口，跳过自动重启")
             return
         }
-        runTraeRestart(reason: "检测到 Trae 刚启动未带调试端口，自动跟随")
+        runTraeRestart(reason: "检测到 Trae 刚启动未带调试端口，自动跟随", auto: true)
     }
 
-    private func runTraeRestart(reason: String) {
+    private func runTraeRestart(reason: String, auto: Bool) {
         guard traeLivePhase == .idle else { return }
         traeLivePhase = .restarting
         Diagnostics.record("trae-live", "开始重启 Trae：\(reason)")
@@ -771,9 +791,16 @@ final class UsageStore: ObservableObject {
             await MainActor.run {
                 self.traeLivePhase = .idle
                 if let error = result.error {
+                    if auto {
+                        self.traeAutoFailures += 1
+                        if self.traeAutoFailures >= 2 {
+                            Diagnostics.record("trae-live", "自动跟随连续失败 \(self.traeAutoFailures) 次，已暂停（\(error)）")
+                        }
+                    }
                     self.setError(error, for: .trae)
                     return
                 }
+                self.traeAutoFailures = 0
                 self.refresh([.trae])
             }
         }
@@ -785,8 +812,9 @@ final class UsageStore: ObservableObject {
         let uptimeSeconds: Int
     }
 
-    /// Trae 主进程（过滤掉带 --type= 的 Electron 子进程）。
-    private static func traeMainProcess() -> TraeProcess? {
+    /// Trae 主进程（过滤掉带 --type= 的 Electron 子进程）。nonisolated：ps 探测
+    /// 在后台线程跑，不碰任何实例状态。
+    nonisolated private static func traeMainProcess() -> TraeProcess? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["axo", "pid=,etime=,command="]
@@ -1109,6 +1137,26 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// history 落盘节流：满采样时 history.json 约 20MB，每个样本都备份+全量重写
+    /// 意味着每分钟一次 20MB 写盘（SSD 磨损）。改为最多 5 分钟落一次盘；
+    /// 采集每分钟都在进行，下一轮 recordHistory 会自然触发到期的 flush，
+    /// 崩溃场景最多丢最近几分钟的样本，可接受。
+    private var historyDirty = false
+    private var historyNextFlushAt = Date.distantPast
+
+    private func requestHistoryFlush() {
+        historyDirty = true
+        guard Date() >= historyNextFlushAt else { return }
+        flushHistoryNow()
+    }
+
+    private func flushHistoryNow() {
+        guard historyDirty else { return }
+        historyDirty = false
+        historyNextFlushAt = Date().addingTimeInterval(300)
+        saveHistory()
+    }
+
     private func saveHistory() {
         let snapshot = HistorySnapshot(
             samples: Providers.all.reduce(into: [:]) { partial, descriptor in
@@ -1156,7 +1204,7 @@ final class UsageStore: ObservableObject {
         samples.append(sample)
         samples = UsageAnalytics.prune(samples)
         setHistory(samples, for: provider)
-        saveHistory()
+        requestHistoryFlush()
     }
 
     func exportHistory(days: Int) {

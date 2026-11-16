@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
@@ -277,7 +278,14 @@ def wb_rpc(sock, buffer, request_id, method, params):
         "jsonrpc": "2.0", "id": request_id, "method": method,
         "params": params, "mode": "call",
     })
+    # recv 超时只管单次读；对端若持续推送非匹配帧，每次都在超时前到达，
+    # 循环会永不退出。加一个总 deadline 兜底。
+    deadline = time.time() + 30
     while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise RuntimeError("WorkBuddy IPC 响应超时（30 秒未收到匹配回包）")
+        sock.settimeout(min(8, remaining))
         frame, buffer = wb_read_frame(sock, buffer)
         if frame.get("id") != request_id:
             continue
@@ -629,9 +637,15 @@ def _login_state_write(**fields):
     state["updatedAt"] = int(time.time())
     try:
         APP_SUPPORT.mkdir(parents=True, exist_ok=True)
-        QODER_LOGIN_STATE.write_text(
-            json.dumps(state, ensure_ascii=False), encoding="utf-8"
-        )
+        # 临时文件 + rename 保证原子性：并发写不会互相截断，读侧永远看到完整 JSON。
+        # 0600：登录状态里可能带一次性授权 URL，不能让同机其他用户读。
+        tmp = QODER_LOGIN_STATE.with_suffix(".json.tmp")
+        fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps(state, ensure_ascii=False).encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(str(tmp), str(QODER_LOGIN_STATE))
     except Exception:
         pass
     return state
@@ -1268,10 +1282,46 @@ class TraeCDP:
         return None
 
 
+def trae_cdp_owner_ok(port=TRAE_CDP_PORT):
+    """确认 9335 确属 Trae，防止本机恶意进程抢注端口骗走注入脚本里的 JWT。
+
+    两道检查：/json/version 的 Browser 字段，以及监听进程的可执行名。
+    lsof 失败时退化为只信 version 检查（version 也可伪造，但攻击成本已显著抬高）。
+    """
+    try:
+        version = _trae_cdp_http("/json/version", port)
+    except Exception:
+        return False
+    # Browser 字段只有 Chrome/xxx；Trae 的标识在 User-Agent（TraeCN/1.107.1）里。
+    haystack = " ".join(str(v) for k, v in (version or {}).items() if k in ("Browser", "User-Agent"))
+    if "trae" not in haystack.lower():
+        return False
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        for line in out.splitlines()[1:]:
+            pid = line.split()[1] if line.split() else ""
+            if not pid.isdigit():
+                continue
+            # Trae 主进程可执行名是 Electron，必须看完整命令行里的 App 路径。
+            command = subprocess.run(
+                ["ps", "-p", pid, "-o", "command="], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+            if command and "trae" in command.lower():
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def trae_cdp_targets(port=TRAE_CDP_PORT):
     try:
         data = _trae_cdp_http("/json/list", port)
     except Exception:
+        return []
+    if not trae_cdp_owner_ok(port):
         return []
     pages = [
         target for target in data
@@ -1297,7 +1347,11 @@ def trae_cdp_fetch_api(port=TRAE_CDP_PORT):
     """
     if not TRAE_JWT_TOKEN_PATH.is_file():
         return None
-    token = TRAE_JWT_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    try:
+        token = TRAE_JWT_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        # is_file 与 read 之间存在删除/权限竞态；这里失败应降级到日志采集而非整体 fail。
+        return None
     if not token:
         return None
     targets = trae_cdp_targets(port)
@@ -1379,11 +1433,15 @@ def trae_collect_cdp(port=TRAE_CDP_PORT):
 
 
 def trae_cdp_restart() -> dict:
-    """退出 Trae 并带调试端口重启。Trae 是 VS Code 系，会自动恢复窗口。"""
+    """退出 Trae 并带调试端口重启。Trae 是 VS Code 系，会自动恢复窗口。
+
+    只处理当前用户的实例（pgrep 限定 uid）；就绪判定用 trae_cdp_owner_ok，
+    确认 9335 的监听者确实是 Trae 而不是抢注端口的其他进程。
+    """
     app_path = "/Applications/Trae CN.app"
     binary_hint = app_path + "/Contents/MacOS/Electron"
     running = lambda: subprocess.run(
-        ["pgrep", "-f", binary_hint], capture_output=True
+        ["pgrep", "-U", str(os.getuid()), "-f", binary_hint], capture_output=True
     ).returncode == 0
     if running():
         try:
@@ -1407,10 +1465,11 @@ def trae_cdp_restart() -> dict:
     deadline = time.time() + 40
     while time.time() < deadline:
         try:
-            _trae_cdp_http("/json/version", timeout=1.5)
-            return {"ok": True, "message": "Trae 已带实时采集端口重启，稍后自动刷新余额"}
+            if trae_cdp_owner_ok():
+                return {"ok": True, "message": "Trae 已带实时采集端口重启，稍后自动刷新余额"}
         except Exception:
-            time.sleep(1)
+            pass
+        time.sleep(1)
     return fail("Trae 已重启，但调试端口未就绪；请确认 Trae 正常启动后重试")
 
 
@@ -1517,6 +1576,33 @@ QODER_ACTIONS = {
 }
 
 
+def acquire_collection_lock(wait_seconds=10.0):
+    """单实例锁：App 每 60 秒轮询，而 trae fetch 单轮最坏 ~2 分钟，
+    重叠运行会让 PTY/app-server 子进程堆积。拿到锁返回 fd（保持打开即持锁），
+    等待超时返回 None，由调用方输出失败 JSON 退出。"""
+    # 自己成组：Swift 侧超时收尸按进程组 TERM/KILL，连带清理
+    # osascript/open/qoderclicn 等孙进程（父侧 setpgid 与 exec 有竞态，子侧做才可靠）。
+    try:
+        os.setpgrp()
+    except OSError:
+        pass
+    APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+    lock_path = APP_SUPPORT / "collector.lock"
+    # O_CLOEXEC 必须加：pty.fork/execvpe 拉起的 CLI 子进程默认继承所有 fd，
+    # 锁 fd 一旦被子进程继承且子进程活得比父进程久，锁就永久泄漏。
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+    deadline = time.time() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.time() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.4)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1535,6 +1621,10 @@ def main():
             {"version": 1, "updatedAt": int(time.time()), "action": args.action, "result": payload},
             ensure_ascii=False,
         ))
+        return
+    lock_fd = acquire_collection_lock()
+    if lock_fd is None:
+        print(json.dumps(fail("上一轮采集仍在进行，本轮跳过"), ensure_ascii=False))
         return
     if args.provider == "all":
         providers = list(COLLECTORS)
