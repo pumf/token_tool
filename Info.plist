@@ -34,5 +34,9 @@
 	<string>Copyright © 2026 pumf. MIT License.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>TokenTool 需要向本机 AI 客户端发送控制指令，用于额度采集与客户端重启。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>TokenTool 本身不读取照片；个别 AI 客户端在本机采集时可能触发系统媒体授权，此说明用于解释弹窗来由。</string>
 </dict>
 </plist>

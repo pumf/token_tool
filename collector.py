@@ -1435,6 +1435,24 @@ def trae_collect_cdp(port=TRAE_CDP_PORT):
     return None
 
 
+def _trae_main_pids(binary_hint: str) -> list:
+    """当前用户下 Trae 主进程（Electron）的 PID 列表；helper 子进程命令行不同，不会误伤。"""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-U", str(os.getuid()), "-f", binary_hint],
+            capture_output=True, timeout=5,
+        ).stdout
+    except Exception:
+        return []
+    pids = []
+    for token in out.split():
+        try:
+            pids.append(int(token))
+        except ValueError:
+            pass
+    return pids
+
+
 def trae_cdp_restart() -> dict:
     """退出 Trae 并带调试端口重启。Trae 是 VS Code 系，会自动恢复窗口。
 
@@ -1443,19 +1461,30 @@ def trae_cdp_restart() -> dict:
     """
     app_path = "/Applications/Trae CN.app"
     binary_hint = app_path + "/Contents/MacOS/Electron"
-    running = lambda: subprocess.run(
-        ["pgrep", "-U", str(os.getuid()), "-f", binary_hint], capture_output=True
-    ).returncode == 0
+    running = lambda: bool(_trae_main_pids(binary_hint))
     if running():
-        try:
-            subprocess.run(["osascript", "-e", 'quit app "Trae CN"'], capture_output=True, timeout=15)
-        except Exception as exc:
-            return fail("无法退出 Trae：" + str(exc))
+        # 直接给主进程发 SIGTERM 优雅退出，不再用 osascript 发 Apple Event，
+        # 免得触发「TokenTool 想控制 Trae CN」的自动化授权弹窗。
+        for pid in _trae_main_pids(binary_hint):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
         deadline = time.time() + 15
         while running() and time.time() < deadline:
             time.sleep(0.5)
         if running():
-            return fail("Trae 未能退出，请手动退出后重试")
+            # SIGTERM 没退干净：补 SIGKILL 再等一小会儿。
+            for pid in _trae_main_pids(binary_hint):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            deadline = time.time() + 5
+            while running() and time.time() < deadline:
+                time.sleep(0.5)
+            if running():
+                return fail("Trae 未能退出，请手动退出后重试")
     try:
         launch = subprocess.run(
             ["open", "-a", app_path, "--args", "--remote-debugging-port=%d" % TRAE_CDP_PORT],
