@@ -1009,6 +1009,13 @@ final class UsageStore: ObservableObject {
     }
 
     private func apply(_ result: ProviderResult, to provider: UsageProvider) {
+        // 锁竞争让位（transient）：同名上一轮还没采完，本轮主动跳过。
+        // 保留上次数据、不当错误展示、不记失败退避，下一个周期自然会再采。
+        if result.ok == false, result.transient == true {
+            collectorFailures[provider] = nil
+            collectorRetryAt[provider] = nil
+            return
+        }
         guard result.ok == true else {
             let message = result.error
                 ?? (result.ok == nil ? "采集结果缺少状态字段，请升级应用" : "未知错误")

@@ -75,6 +75,8 @@ struct ProviderResult: Codable, Sendable {
     var collectedAt: Int?
     /// 采集器判断数据源太久没动过（如 Trae 不再写积分日志）时置真，页面负责提示。
     var stale: Bool?
+    /// 锁竞争让位：同名上一轮还没采完，本轮跳过。保留上次数据、不当错误展示。
+    var transient: Bool?
 
     var updatedDate: Date? {
         guard let updatedAt else { return nil }
@@ -92,7 +94,7 @@ struct ProviderResult: Codable, Sendable {
         case ok, error, updatedAt, plan, accountType, windows, credits, resetCredits
         case total, remaining, used, usedScope, usedPercent, remainingPercent, packages, unit
         case planExpiresAt, planUsed, planTotal, addonUsed, addonTotal
-        case orgResourcePackage, source, collectedAt, stale
+        case orgResourcePackage, source, collectedAt, stale, transient
     }
 
     init(from decoder: Decoder) throws {
@@ -122,6 +124,7 @@ struct ProviderResult: Codable, Sendable {
         source = container.loose(String.self, .source)
         collectedAt = container.loose(Int.self, .collectedAt)
         stale = container.loose(Bool.self, .stale)
+        transient = container.loose(Bool.self, .transient)
     }
 }
 

@@ -390,6 +390,34 @@ def test_trae_cdp_parse():
     expect_equal(collector.trae_remaining_from_probe(None), None, "探测结果缺失不抛错")
 
 
+def test_provider_lock_and_transient_fail():
+    # 跳过型失败带 transient 标记，普通失败不带；应用靠它区分「让位」与真错误。
+    plain = collector.fail("普通失败")
+    check("transient" not in plain, "普通失败不带 transient 标记")
+    skipped = collector.fail("上一轮采集仍在进行，本轮跳过", transient=True)
+    check(skipped.get("transient") is True, "跳过型失败带 transient 标记")
+    check(skipped["ok"] is False, "跳过型失败 ok 仍为 False")
+
+    # 每 provider 一把锁：同名互斥、异名并行，锁文件按 provider 命名。
+    original = collector.APP_SUPPORT
+    with tempfile.TemporaryDirectory() as tmp:
+        collector.APP_SUPPORT = Path(tmp)
+        try:
+            first = collector.acquire_collection_lock("trae", wait_seconds=0.1)
+            check(first is not None, "同名第一把锁能拿到")
+            check((Path(tmp) / "collector-trae.lock").exists(), "锁文件按 provider 命名")
+            second = collector.acquire_collection_lock("trae", wait_seconds=0.1)
+            check(second is None, "同名第二把锁让位返回 None")
+            other = collector.acquire_collection_lock("workbuddy", wait_seconds=0.1)
+            check(other is not None, "不同名互不影响")
+            check((Path(tmp) / "collector-workbuddy.lock").exists(), "第二家锁文件独立")
+            for fd in (first, other):
+                if fd is not None:
+                    os.close(fd)
+        finally:
+            collector.APP_SUPPORT = original
+
+
 def main():
     for name, body in sorted(globals().items()):
         if name.startswith("test_") and callable(body):

@@ -700,6 +700,21 @@ struct AnalyticsSuite {
             expectNil(legacy?.stale)
             expectNil(legacy?.collectedAt)
         }
+        test("锁竞争让位结果被解码并带 transient 标记") {
+            // collector.py 拿不到同名锁时放进 providers 的跳过载荷。
+            let json = Data(
+                #"{"version":1,"updatedAt":1794793280,"providers":{"workbuddy":{"ok":false,"error":"上一轮采集仍在进行，本轮跳过","updatedAt":1794793280,"transient":true}}}"#
+                    .utf8
+            )
+            let output = try? JSONDecoder().decode(CollectorOutput.self, from: json)
+            expectNil(output?.providerErrors["workbuddy"])
+            expectEqual(output?.providers?["workbuddy"]?.ok, false)
+            expectEqual(output?.providers?["workbuddy"]?.transient, true)
+            expectEqual(output?.providers?["workbuddy"]?.error, "上一轮采集仍在进行，本轮跳过")
+            // 普通失败不带 transient，旧版采集器输出也不炸。
+            let plain = try? JSONDecoder().decode(ProviderResult.self, from: Data(#"{"ok":false,"error":"未登录"}"#.utf8))
+            expectNil(plain?.transient)
+        }
     }
 
     // MARK: 供应商注册表

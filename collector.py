@@ -33,8 +33,11 @@ ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 OSC_RE = re.compile(r"\x1b\][^\x07]*(?:\x07|\x1b\\)")
 
 
-def fail(message: str) -> dict:
-    return {"ok": False, "error": str(message)[:400], "updatedAt": int(time.time())}
+def fail(message: str, transient: bool = False) -> dict:
+    payload = {"ok": False, "error": str(message)[:400], "updatedAt": int(time.time())}
+    if transient:
+        payload["transient"] = True
+    return payload
 
 
 def number(value, default=0.0) -> float:
@@ -1576,9 +1579,11 @@ QODER_ACTIONS = {
 }
 
 
-def acquire_collection_lock(wait_seconds=10.0):
-    """单实例锁：App 每 60 秒轮询，而 trae fetch 单轮最坏 ~2 分钟，
-    重叠运行会让 PTY/app-server 子进程堆积。拿到锁返回 fd（保持打开即持锁），
+def acquire_collection_lock(name="all", wait_seconds=10.0):
+    """单实例锁按 provider 分把：App 每 60 秒把五家并行采集（各自起一个 python），
+    全局一把锁会把它们串行化——任何一家慢（WorkBuddy IPC 最坏 30 秒、Trae 重启
+    最长 ~90 秒）都会把别家挤到超时跳过。同名才互斥，既防住同一平台的 PTY/
+    app-server 子进程堆积，又不影响五家并行。拿到锁返回 fd（保持打开即持锁），
     等待超时返回 None，由调用方输出失败 JSON 退出。"""
     # 自己成组：Swift 侧超时收尸按进程组 TERM/KILL，连带清理
     # osascript/open/qoderclicn 等孙进程（父侧 setpgid 与 exec 有竞态，子侧做才可靠）。
@@ -1587,7 +1592,7 @@ def acquire_collection_lock(wait_seconds=10.0):
     except OSError:
         pass
     APP_SUPPORT.mkdir(parents=True, exist_ok=True)
-    lock_path = APP_SUPPORT / "collector.lock"
+    lock_path = APP_SUPPORT / ("collector.lock" if name == "all" else "collector-%s.lock" % name)
     # O_CLOEXEC 必须加：pty.fork/execvpe 拉起的 CLI 子进程默认继承所有 fd，
     # 锁 fd 一旦被子进程继承且子进程活得比父进程久，锁就永久泄漏。
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
@@ -1622,25 +1627,37 @@ def main():
             ensure_ascii=False,
         ))
         return
-    lock_fd = acquire_collection_lock()
-    if lock_fd is None:
-        print(json.dumps(fail("上一轮采集仍在进行，本轮跳过"), ensure_ascii=False))
-        return
     if args.provider == "all":
         providers = list(COLLECTORS)
     else:
         providers = list(GROUPS.get(args.provider, (args.provider,)))
     result = {"version": 1, "updatedAt": int(time.time()), "providers": {}}
     if len(providers) > 1:
-        with ThreadPoolExecutor(max_workers=len(providers)) as pool:
-            futures = {name: pool.submit(collect, name) for name in providers}
-            for name, future in futures.items():
-                try:
-                    result["providers"][name] = future.result()
-                except Exception as exc:
-                    result["providers"][name] = fail(exc)
-    else:
+        # 多 provider（CLI 手动 all/分组）：逐家拿锁，拿不到的只让位那一家，
+        # 带 transient 标记，应用侧静默保留上次数据、不当错误展示。
+        collected = {}
         for name in providers:
+            fd = acquire_collection_lock(name, wait_seconds=5.0)
+            if fd is None:
+                result["providers"][name] = fail("上一轮采集仍在进行，本轮跳过", transient=True)
+            else:
+                collected[name] = fd
+        if collected:
+            with ThreadPoolExecutor(max_workers=len(collected)) as pool:
+                futures = {name: pool.submit(collect, name) for name in collected}
+                for name, future in futures.items():
+                    try:
+                        result["providers"][name] = future.result()
+                    except Exception as exc:
+                        result["providers"][name] = fail(exc)
+    else:
+        name = providers[0]
+        fd = acquire_collection_lock(name)
+        if fd is None:
+            # 跳过必须放进 providers 里带出去：顶层裸 fail 会被应用解码成
+            # 「providers 为空」，卡片上显示成误导性的「采集器未返回 X 数据」。
+            result["providers"][name] = fail("上一轮采集仍在进行，本轮跳过", transient=True)
+        else:
             result["providers"][name] = collect(name)
     print(json.dumps(result, ensure_ascii=False))
 
