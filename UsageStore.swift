@@ -206,7 +206,10 @@ final class UsageStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.flushHistoryNow()
+            // 闭包明确跑在 .main 队列，用 assumeIsolated 满足主 actor 隔离检查。
+            MainActor.assumeIsolated {
+                self?.flushHistoryNow()
+            }
         }
     }
 

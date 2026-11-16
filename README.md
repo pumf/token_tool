@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.0**（build 24） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.1**（build 25） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -169,7 +169,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.0` | 当前安装版本 |
+| `v1.8.1` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -209,11 +209,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.0-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.0-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.0.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.0/TokenTool-1.8.0.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.1-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.1-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.1.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.1/TokenTool-1.8.1.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.0/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.1/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -382,9 +382,22 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.8.1
+
+- **Trae 从读日志换成实时 API**：此前 Trae 只能从本机 `renderer.log` 抓「积分变动时」的余额，滞后且只在客户端刷新时更新。现在采集器经 Trae 自己开的 CDP 调试端口（127.0.0.1:9335）进入渲染进程，用页面上下文里的 `fetch` 调官方用量接口，实时拿到剩余额度与总额度；HTTP 客户端直连会被 TLS 指纹校验拒绝，页面内 fetch 天然携带正确指纹。日志路径降级为兜底，卡片新增总额度（礼包叠加后的总量）与「Free」标识，口径从「只有余额」变为额度制。
+- **全平台刷新间隔统一 60 秒**：五家全部改为 60 秒采集一次，分组并行调度不变。
+- **一轮稳定性与安全审计修复**（高优先级 5 项 + 中优先级 10 项）：
+  - 采集器加 flock 单实例锁：上一轮没跑完时本轮直接跳过，不再堆叠并发子进程；锁 fd 带 `O_CLOEXEC`，不会泄漏给 osascript 等孙进程。
+  - WorkBuddy IPC 读帧加 30 秒总 deadline：对端持续推非匹配帧时不再永久阻塞。
+  - CDP 连接前校验端口归属：检查 `/json/version` 的 Browser 与 User-Agent、监听进程 PID 与完整命令行都确实是 Trae，杜绝连到别的 Chromium 调试端口；重启等待的就绪判定同源。
+  - Trae 自动跟随加熔断：连续 2 次失败停用自动重启，成功后复位，不再在 Trae 异常时无限拉起。
+  - ps 探测移出主线程（detached task），唤醒通知尊重采集退避，超时收尸改杀整个进程组（TERM→KILL），osascript / open 等孙进程一并清理。
+  - 登录状态文件原子写（临时文件 + rename，0600 权限）、JWT 读取 OSError 降级、诊断日志只写脱敏后的错误、history 每 5 分钟节流落盘并在退出时强制落盘、退出通知闭包用 `MainActor.assumeIsolated` 满足主 actor 隔离。
+- **测试**：Swift 侧 259 项、Python 侧 117 项全部通过；「全部平台统一 60 秒刷新分组」与假跌段过滤均有对应断言。
+
 ### 1.8.0
 
-> 尚未发布，Release 与安装包待单独发版。
+> 2026-11-11 发布。
 
 - **接入第五家 Trae**：字节跳动的 Trae CN 是五家里唯一没有官方用量通道的——本机 127.0.0.1:17788 是登录用的 `SupabaseOAuthLocalServer`（要 `x-jwt-token`）、`/usr/local/bin/trae` 只是 IDE 启动器、`traecli` 没有用量命令且只对旗舰版开放、`agent-tool-host` 是工具沙箱。逐条排除后确认只剩一条路：官方客户端自己会把积分余额写进本机明文日志。经确认后按这一条接入，并且把它当作**整条「只走官方 CLI / 本机 IPC / app-server」规则的唯一例外**在 README 里写清楚。
 - **只取一个数字，不读一份日志**：`collector.py` 按修改时间从新到旧最多看 6 个 `~/Library/Application Support/Trae CN/logs/*/window*/renderer.log`，每个先读尾部 2 MB、没命中再顺序扫一遍，只用一条正则抓 `credits mutation refresh completed` 里的 `remaining` 与行首时间戳。整行原文不进缓存、不进历史、不进诊断日志；负数与非数字直接丢弃，全部候选都脏时按失败返回，不编造余额。时间戳用日志自己记录的时间而不是采集时刻，所以滞后会直接显示在「更新于」上，卡片里也写明「仅在积分变动时更新，可能滞后于客户端面板」。本机实测单次 0.15 秒返回，形如 `{"ok": true, "remaining": 1200.0, "unit": "credits", "source": "trae-log", "updatedAt": …}`（示例值，非真实余额）。
@@ -582,7 +595,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.0（build 24，尚未发布） |
+| 当前版本 | 1.8.1（build 25） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
