@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.2**（build 26） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.3**（build 27） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -169,7 +169,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.2` | 当前安装版本 |
+| `v1.8.3` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -209,11 +209,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.2-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.2-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.2.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.2/TokenTool-1.8.2.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.3-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.3-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.3.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.2/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.3/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -382,7 +382,18 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
+### 1.8.3
+
+> 2026-11-16 发布。
+
+- **菜单栏切拍不再抖动**：剩余量与今日消耗来回滚动时，整行宽度会「一点点」变化。原因是逐段补位虽让两拍按 `NSAttributedString.size()` 等宽，但 `NSStatusBarButton` 按 intrinsic 宽度自适应会裁掉尾随空格，末段靠尾部空格+kern 补的零头两拍不同 → 按钮宽度抖动。改为末段数值右对齐（补位全放数值之前，整串以数字结尾不被裁），两拍逐像素等宽。
+- **Trae 签到提醒文案对齐**：Trae 每日 0 点的领取提醒自接入起就在，但文案仍写「100 积分 / 领取今日积分」，与卡片统一的「额度」口径和实际的「签到」机制对不上。改为「100 额度 / 完成每日签到，领取 100 额度」，面板角标随之显示「Trae 今日 100 额度待领取」。
+- **重启 Trae 不再弹「控制 Trae CN」**：实时采集带调试端口重启客户端时，原用 `osascript quit` 发 Apple Event，被 macOS 归责到 TokenTool 触发自动化授权弹窗。改为直接对 Electron 主进程发 `SIGTERM`（超时补 `SIGKILL`），无需自动化权限；并在 Info.plist 补 `NSAppleEventsUsageDescription` / `NSPhotoLibraryUsageDescription`，让子进程 CLI 万一触发的系统弹窗也带上明确来由。
+- **测试**：新增末段非空白结尾断言，Swift 268 项、Python 125 项全部通过。
+
 ### 1.8.2
+
+> 2026-11-16 发布。
 
 - **修复「采集器未返回 X 数据」误报**：1.8.1 引入的采集单实例锁是全局一把，而 App 每 60 秒把五家**并行**采集——五家抢同一把锁被强行串行化，任何一家慢（WorkBuddy IPC 最坏 30 秒、Trae 自动重启最长约 90 秒）都会把其余几家挤到等锁超时，输出没有 providers 字段的顶层失败 JSON，卡片上显示成误导性的「采集器未返回 X 数据」。现在锁按 provider 分把（同名互斥保留防子进程堆积的初衷，异名不再互相阻塞）；让位跳过改为放进 providers 里并带 `transient` 标记，应用静默保留上次数据、不当错误展示、不进失败退避。
 - **测试**：新增锁隔离与 transient 载荷断言，Swift 264 项、Python 125 项全部通过。
@@ -602,7 +613,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.2（build 26） |
+| 当前版本 | 1.8.3（build 27） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
