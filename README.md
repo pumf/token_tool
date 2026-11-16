@@ -4,7 +4,7 @@ macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBud
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.3**（build 27） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.4**（build 28） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -169,7 +169,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.3` | 当前安装版本 |
+| `v1.8.4` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -209,11 +209,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.3-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.3-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.3.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.3/TokenTool-1.8.3.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.4-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.4-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.4.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.4/TokenTool-1.8.4.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.3/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.4/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -381,6 +381,13 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.8.4
+
+> 2026-11-16 发布。
+
+- **双击卡片打开对应客户端**：双击任意卡片（常规/简单模式）或极简模式的行，即启动该家客户端 App（Qoder CN、ChatGPT、Claude、WorkBuddy、Trae CN），复用既有的按 bundle id 查找、失败退回 `/Applications` 路径的打开逻辑。手势通过修饰符只在有动作时挂载，卡片的「打开/官网」按钮、拖拽抓手、右键菜单各自照常响应点击、互不干扰；悬停卡片显示「双击打开 <App>」提示。
+- **测试**：Swift 268 项、Python 125 项全部通过。
 
 ### 1.8.3
 
@@ -613,7 +620,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.3（build 27） |
+| 当前版本 | 1.8.4（build 28） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 
