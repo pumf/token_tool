@@ -1081,6 +1081,10 @@ struct AnalyticsSuite {
                 let today = MenuBarText.compose([credits, wide, noToday], style: style, showsToday: true, font: font)
                 let gap = abs(width(today) - width(remaining))
                 check(gap < 0.05, "\(style) 两拍实测宽度相差 \(gap)pt，补零头没有补齐")
+                // 末段必须以非空白结尾：NSStatusBarButton 自适应会裁掉尾随空格，
+                // 数字结尾才保证两拍按钮宽度逐像素一致、切换不抖。
+                check(remaining.string.last.map { !$0.isWhitespace } == true, "\(style) 剩余拍结尾是空白，会被裁")
+                check(today.string.last.map { !$0.isWhitespace } == true, "\(style) 今日拍结尾是空白，会被裁")
             }
         }
         test("全部平台算不出今日消耗时滚动不改变文案") {

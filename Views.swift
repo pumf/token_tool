@@ -608,35 +608,62 @@ enum MenuBarText {
         let separator = style == .classic ? "   " : " "
         let space = max(measure(" "), 0.0001)
         let line = NSMutableAttributedString()
+        let lastIndex = current.count - 1
+        func plainSpaces(_ n: Int) {
+            if n > 0 {
+                line.append(NSAttributedString(string: String(repeating: " ", count: n), attributes: attributes))
+            }
+        }
+        func spaceWithKern(_ kern: CGFloat) {
+            line.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: NSNumber(value: Double(kern))]))
+        }
         for (index, part) in current.enumerated() {
             if index > 0 {
                 line.append(NSAttributedString(string: separator, attributes: attributes))
             }
             line.append(NSAttributedString(string: part.lead, attributes: attributes))
             let pad = slots[index] - measure(part.lead + part.value)
-            if pad >= space {
+            let isLast = index == lastIndex
+            if isLast {
+                // 末段把补位全部放在数值之前（数值右对齐到槽尾），整串以数字结尾。
+                // NSStatusBarButton 按 intrinsic 宽度自适应会裁掉尾随空格，若末段靠尾部
+                // 空格+kern 补零头，两拍的零头不同 → 按钮宽度切换时抖动；数字结尾则不被裁，
+                // 两拍总宽逐像素一致。
+                if pad >= space {
+                    let count = Int((pad / space).rounded(.down))
+                    let remainder = pad - CGFloat(count) * space
+                    if remainder > 0.05 {
+                        plainSpaces(count - 1)
+                        spaceWithKern(remainder)
+                    } else {
+                        plainSpaces(count)
+                    }
+                    line.append(NSAttributedString(string: part.value, attributes: attributes))
+                } else if pad > 0.05 {
+                    spaceWithKern(pad - space)
+                    line.append(NSAttributedString(string: part.value, attributes: attributes))
+                } else {
+                    line.append(NSAttributedString(string: part.value, attributes: attributes))
+                }
+            } else if pad >= space {
                 let count = Int((pad / space).rounded(.down))
                 let head = count / 2
                 let tail = count - head
-                if head > 0 {
-                    line.append(NSAttributedString(string: String(repeating: " ", count: head), attributes: attributes))
-                }
+                plainSpaces(head)
                 line.append(NSAttributedString(string: part.value, attributes: attributes))
-                if tail > 1 {
-                    line.append(NSAttributedString(string: String(repeating: " ", count: tail - 1), attributes: attributes))
-                }
+                plainSpaces(tail - 1)
                 // 零头补在最后一颗空格上：kern 加在字形之后，整组的实测宽度正好等于槽宽。
                 let remainder = pad - CGFloat(count) * space
                 if remainder > 0.05 {
-                    line.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: NSNumber(value: Double(remainder))]))
+                    spaceWithKern(remainder)
                 } else {
-                    line.append(NSAttributedString(string: " ", attributes: attributes))
+                    plainSpaces(1)
                 }
             } else {
                 line.append(NSAttributedString(string: part.value, attributes: attributes))
                 // 零头不足一颗空格：一颗空格加负 kern，步进正好等于零头。
                 if pad > 0.05 {
-                    line.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: NSNumber(value: Double(pad - space))]))
+                    spaceWithKern(pad - space)
                 }
             }
         }
