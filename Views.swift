@@ -125,6 +125,65 @@ enum Format {
     }
 }
 
+/// 设置区 chip 的流式布局：每个小块按文字宽度收缩，放不下才换行；
+/// 横向与纵向间隔恒定为 spacing，不会出现某两块挤在一起、某两块又离得远。
+@available(macOS 13.0, *)
+struct ChipFlow: Layout {
+    var spacing: CGFloat = Token.spaceTight
+
+    struct Row {
+        var items: [(index: Int, width: CGFloat, height: CGFloat)] = []
+        var totalWidth: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        let rows = arrange(maxWidth: maxWidth, subviews: subviews)
+        let width = rows.map { $0.totalWidth }.max() ?? 0
+        let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: min(width, maxWidth), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let rows = arrange(maxWidth: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        for row in rows {
+            var x = bounds.minX
+            for item in row.items {
+                let size = subviews[item.index].sizeThatFits(.unspecified)
+                subviews[item.index].place(
+                    at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(size)
+                )
+                x += item.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func arrange(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if !current.items.isEmpty, current.totalWidth + spacing + size.width > maxWidth {
+                rows.append(current)
+                current = Row()
+            }
+            if !current.items.isEmpty {
+                current.totalWidth += spacing
+            }
+            current.totalWidth += size.width
+            current.height = max(current.height, size.height)
+            current.items.append((index: index, width: size.width, height: size.height))
+        }
+        if !current.items.isEmpty { rows.append(current) }
+        return rows
+    }
+}
+
 struct UsageBar: View {
     let label: String
     let detail: String
@@ -895,8 +954,11 @@ struct MenuContent: View {
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: Token.spaceRow) {
             interfaceSettings
+            Divider()
             menuBarSettings
+            Divider()
             reminderSettings
+            Divider()
             alertSettings
             if store.notificationsDenied {
                 HStack(spacing: 4) {
@@ -1304,10 +1366,17 @@ struct MenuContent: View {
         guard let result = store.result(for: provider), result.ok == true else { return 0 }
         let percent: Double?
         switch provider.quotaKind {
-        case .credits: percent = result.remainingPercent
+        case .credits: percent = creditsRemainingPercent(result)
         case .percentWindow: percent = result.primaryWindow?.remainingPercent
         }
         return CGFloat(min(max((percent ?? 0) / 100, 0), 1))
+    }
+
+    /// 积分制剩余比例：接口直接给比例就用它，只给余额和总额（如 Trae）就折算，两者都缺才回 nil。
+    private func creditsRemainingPercent(_ result: ProviderResult) -> Double? {
+        if let percent = result.remainingPercent { return percent }
+        guard let total = result.total, total > 0, let remaining = result.remaining else { return nil }
+        return remaining * 100 / total
     }
 
     /// 迷你趋势与常规卡片的曲线同源：取预测给出的近 7 天序列，取不到就留灰线，不画一条没有依据的折线。
@@ -1345,10 +1414,7 @@ struct MenuContent: View {
         guard let result = store.result(for: provider), result.ok == true else { return "等待采集" }
         switch provider.quotaKind {
         case .credits:
-            if provider.descriptor.creditLayout == .balanceOnly {
-                return provider.descriptor.creditUnit
-            }
-            guard let percent = result.remainingPercent, percent > 0 else { return provider.descriptor.creditUnit }
+            guard let percent = creditsRemainingPercent(result), percent > 0 else { return provider.descriptor.creditUnit }
             return "\(Format.percent(percent)) 剩余"
         case .percentWindow:
             guard let window = result.primaryWindow else { return "等待采集" }
@@ -1974,23 +2040,31 @@ struct MenuContent: View {
         }
     }
 
-    /// 逐平台的开关行：四家一排会顶出 382 的面板宽度，所以标签独占一行、开关整行铺开。
+    /// 逐平台的开关行：标签与普通行共用同一列 62pt 宽（顶对齐），开关在右侧按文字宽度铺开、流式换行。
+    /// 小块之间只靠统一间隔（spacingTight）分隔，宽度不拉伸，谁也不挤谁。
     private func settingWideRow<Chips: View>(
         _ label: String,
         @ViewBuilder chips: () -> Chips
     ) -> some View {
-        VStack(alignment: .leading, spacing: Token.spaceTight) {
+        HStack(alignment: .top, spacing: Token.spaceTight) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            // 五家一排会顶出 382 的面板宽度，整块面板被居中挤到左边、两侧一起裁掉；
-            // 自适应网格放不下就换行，宽度永远不超过面板。
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 88, maximum: 176), spacing: Token.spaceTight)],
-                alignment: .leading,
-                spacing: Token.spaceTight
-            ) {
-                chips()
+                .frame(width: 62, alignment: .leading)
+            if #available(macOS 13.0, *) {
+                ChipFlow(spacing: Token.spaceTight) {
+                    chips()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 110, maximum: 176), spacing: Token.spaceTight)],
+                    alignment: .leading,
+                    spacing: Token.spaceTight
+                ) {
+                    chips()
+                }
+                Spacer(minLength: 0)
             }
         }
     }
@@ -2019,76 +2093,89 @@ struct MenuContent: View {
         }
     }
 
+    @ViewBuilder
     private var alertSettings: some View {
-        VStack(alignment: .leading, spacing: Token.spaceTight - 1) {
-            settingRow("智能预警") {
-                settingChip(
-                    "低额度",
-                    isOn: $store.alertLowBalance,
-                    iconOn: "exclamationmark.triangle.fill",
-                    iconOff: "exclamationmark.triangle",
-                    help: "剩余低于 \(store.lowBalanceThreshold)% 时提醒"
-                )
-                settingChip(
-                    "重置前耗尽",
-                    isOn: $store.alertExhaustion,
-                    iconOn: "clock.fill",
-                    iconOff: "clock",
-                    help: "Codex 预计在额度重置前耗尽时提醒"
-                )
-                settingChip(
-                    "消耗加速",
-                    isOn: $store.alertAcceleration,
-                    iconOn: "bolt.fill",
-                    iconOff: "bolt",
-                    help: "近 15 分钟消耗速度明显高于此前 1 小时时提醒"
-                )
-            }
-            if store.alertLowBalance {
-                settingRow("低额度阈值") {
-                    ForEach([10, 20, 30], id: \.self) { value in
-                        thresholdChip(value)
-                    }
+        settingRow("智能预警") {
+            settingChip(
+                "低额度",
+                isOn: $store.alertLowBalance,
+                iconOn: "exclamationmark.triangle.fill",
+                iconOff: "exclamationmark.triangle",
+                help: "剩余低于 \(store.lowBalanceThreshold)% 时提醒"
+            )
+            settingChip(
+                "重置前耗尽",
+                isOn: $store.alertExhaustion,
+                iconOn: "clock.fill",
+                iconOff: "clock",
+                help: "Codex 预计在额度重置前耗尽时提醒"
+            )
+            settingChip(
+                "消耗加速",
+                isOn: $store.alertAcceleration,
+                iconOn: "bolt.fill",
+                iconOff: "bolt",
+                help: "近 15 分钟消耗速度明显高于此前 1 小时时提醒"
+            )
+        }
+        if store.alertLowBalance {
+            settingRow("低额度阈值") {
+                ForEach([10, 20, 30], id: \.self) { value in
+                    thresholdChip(value)
                 }
             }
-            settingRow("月度预算") {
-                TextField("0", value: $store.monthlyBudget, format: .number)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 76)
-                    .font(.system(size: 10))
-                    .monospacedDigit()
-                Text("额度")
-                    .font(Token.caption)
-                    .foregroundStyle(.secondary)
-                Text("0 关闭")
-                    .font(Token.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .help("额度制平台本月消耗超过该值时提醒，每家独立计数；填 0 关闭。")
         }
+        settingRow("月度预算") {
+            TextField("0", value: $store.monthlyBudget, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 76)
+                .font(.system(size: 10))
+                .monospacedDigit()
+            Text("额度")
+                .font(Token.caption)
+                .foregroundStyle(.secondary)
+            Text("0 关闭")
+                .font(Token.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .help("额度制平台本月消耗超过该值时提醒，每家独立计数；填 0 关闭。")
     }
 
     private func thresholdChip(_ value: Int) -> some View {
-        let selected = store.lowBalanceThreshold == value
-        return Button("\(value)%") {
+        Button {
             store.lowBalanceThreshold = value
+        } label: {
+            chipSurface(active: store.lowBalanceThreshold == value) {
+                Text("\(value)%")
+                    .monospacedDigit()
+            }
         }
         .buttonStyle(.plain)
-        .font(.system(size: 10, weight: selected ? .semibold : .regular))
-        .monospacedDigit()
-        .foregroundStyle(selected ? Theme.warning : Color.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(
-            Capsule().fill(selected ? Theme.warning.opacity(0.14) : Token.insetFill)
-        )
-        .overlay(
-            Capsule().stroke(
-                selected ? Theme.warning.opacity(0.28) : Token.cardStroke.opacity(0.5),
-                lineWidth: Token.hairline
-            )
-        )
         .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
+    }
+
+    /// 设置区 chip 的统一外观：选中/开启用主题色标注（彩色文字 + 浅色胶囊底 + 彩色描边），
+    /// 未选/关闭灰字 + inset 底 + 淡描边。密度、样式、阈值与逐平台开关都共用这一套。
+    @ViewBuilder
+    private func chipSurface<LabelView: View>(
+        active: Bool,
+        @ViewBuilder label: () -> LabelView
+    ) -> some View {
+        label()
+            .font(.system(size: 10, weight: active ? .semibold : .regular))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .fixedSize()
+            .foregroundStyle(active ? Theme.qoder : Color.secondary)
+            .background(
+                Capsule().fill(active ? Theme.qoder.opacity(0.14) : Token.insetFill)
+            )
+            .overlay(
+                Capsule().stroke(
+                    active ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
+                    lineWidth: Token.hairline
+                )
+            )
     }
 
     /// 页脚那颗模式按钮：三档密度收进一个菜单，标签跟着当前档走。
@@ -2132,51 +2219,25 @@ struct MenuContent: View {
     }
 
     private func densityChip(_ density: PanelDensity) -> some View {
-        let selected = store.density == density
-        return Button {
+        Button {
             store.density = density
         } label: {
-            Text(density.title)
-                .font(.system(size: 10, weight: selected ? .semibold : .regular))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .fixedSize()
-                .foregroundStyle(selected ? Theme.qoder : Color.secondary)
-                .background(
-                    Capsule().fill(selected ? Theme.qoder.opacity(0.14) : Token.insetFill)
-                )
-                .overlay(
-                    Capsule().stroke(
-                        selected ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
-                        lineWidth: Token.hairline
-                    )
-                )
+            chipSurface(active: store.density == density) {
+                Text(density.title)
+            }
         }
         .buttonStyle(.plain)
         .help(density.help)
     }
 
     private func styleChip(_ style: MenuBarStyle) -> some View {
-        let selected = store.menuBarStyle == style
-        return Button {
+        Button {
             store.menuBarStyle = style
         } label: {
-            Text(style.title)
-                .font(.system(size: 10, weight: selected ? .semibold : .regular))
-                .monospacedDigit()
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .fixedSize()
-                .foregroundStyle(selected ? Theme.qoder : Color.secondary)
-                .background(
-                    Capsule().fill(selected ? Theme.qoder.opacity(0.14) : Token.insetFill)
-                )
-                .overlay(
-                    Capsule().stroke(
-                        selected ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
-                        lineWidth: Token.hairline
-                    )
-                )
+            chipSurface(active: store.menuBarStyle == style) {
+                Text(style.title)
+                    .monospacedDigit()
+            }
         }
         .buttonStyle(.plain)
         .help("菜单栏显示 \(style.sample)")
@@ -2192,28 +2253,14 @@ struct MenuContent: View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: isOn.wrappedValue ? iconOn : iconOff)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 10, weight: .medium))
-                    .monospacedDigit()
+            chipSurface(active: isOn.wrappedValue) {
+                HStack(spacing: 4) {
+                    Image(systemName: isOn.wrappedValue ? iconOn : iconOff)
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(title)
+                        .monospacedDigit()
+                }
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .fixedSize()
-            .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
-            .background(
-                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
-                    .fill(isOn.wrappedValue ? Color.primary.opacity(0.08) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Token.radiusControl, style: .continuous)
-                    .stroke(
-                        Token.cardStroke.opacity(isOn.wrappedValue ? 0.8 : 0.4),
-                        lineWidth: Token.hairline
-                    )
-            )
         }
         .buttonStyle(.plain)
         .help("\(help)（\(isOn.wrappedValue ? "已开启" : "已关闭")）")
