@@ -448,8 +448,25 @@ final class UpdateChecker: ObservableObject {
                 return
             }
             Diagnostics.record("update", "已自动安装 \(expectedVersion)，正在重启")
-            NSWorkspace.shared.open(destination)
+            // 直接 open 只会把「还在运行的自己」重新激活，随后 terminate 又把新版本带走了。
+            // 交给一个脱离本进程树的 shell：轮询到旧进程退出，再拉起替换好的新包。
+            self.relaunchAfterQuit(destination)
             NSApp.terminate(nil)
+        }
+    }
+
+    /// 重启助手：轮询当前 PID 直到退出，再 /usr/bin/open 新包；
+    /// 助手启动失败时退化为直接 open（最坏情况是用户手动重启一次）。
+    private func relaunchAfterQuit(_ app: URL) {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"\(app.path)\""]
+        do {
+            try task.run()
+        } catch {
+            Diagnostics.record("update", "重启助手启动失败，直接打开新包")
+            NSWorkspace.shared.open(app)
         }
     }
 

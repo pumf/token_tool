@@ -166,17 +166,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         updateTitle()
         updateContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // 应用是 accessory 身份，不激活的话弹窗永远拿不到 key 窗口：
+        // 1）面板接不住键盘（预算输入框等）；
+        // 2）transient 的「点外面关闭」靠「失焦」触发，窗口没成为 key 就永远等不到。
+        // 激活应用并让弹窗抢焦点，鼠标点击与热键两条路径共用同一行为。
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
         DispatchQueue.main.async { [weak self] in
             self?.resizeIfNeeded()
         }
         store.refreshStaleForPanel()
     }
 
-    /// 热键展开时应用可能不在前台，先激活让面板能接收键盘输入（如预算输入框）。
+    /// 热键展开时应用可能不在前台；激活逻辑已统一进 togglePopover，这里只做转发。
     private func togglePopoverFromHotKey() {
-        if !popover.isShown {
-            NSApp.activate(ignoringOtherApps: true)
-        }
         togglePopover(nil)
     }
 
