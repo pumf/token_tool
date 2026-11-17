@@ -638,7 +638,6 @@ enum MenuBarText {
         let separator = style == .classic ? "   " : " "
         let space = max(measure(" "), 0.0001)
         let line = NSMutableAttributedString()
-        let lastIndex = current.count - 1
         func plainSpaces(_ n: Int) {
             if n > 0 {
                 line.append(NSAttributedString(string: String(repeating: " ", count: n), attributes: attributes))
@@ -653,29 +652,7 @@ enum MenuBarText {
             }
             line.append(NSAttributedString(string: part.lead, attributes: attributes))
             let pad = slots[index] - measure(part.lead + part.value)
-            let isLast = index == lastIndex
-            if isLast {
-                // 末段把补位全部放在数值之前（数值右对齐到槽尾），整串以数字结尾。
-                // NSStatusBarButton 按 intrinsic 宽度自适应会裁掉尾随空格，若末段靠尾部
-                // 空格+kern 补零头，两拍的零头不同 → 按钮宽度切换时抖动；数字结尾则不被裁，
-                // 两拍总宽逐像素一致。
-                if pad >= space {
-                    let count = Int((pad / space).rounded(.down))
-                    let remainder = pad - CGFloat(count) * space
-                    if remainder > 0.05 {
-                        plainSpaces(count - 1)
-                        spaceWithKern(remainder)
-                    } else {
-                        plainSpaces(count)
-                    }
-                    line.append(NSAttributedString(string: part.value, attributes: attributes))
-                } else if pad > 0.05 {
-                    spaceWithKern(pad - space)
-                    line.append(NSAttributedString(string: part.value, attributes: attributes))
-                } else {
-                    line.append(NSAttributedString(string: part.value, attributes: attributes))
-                }
-            } else if pad >= space {
+            if pad >= space {
                 let count = Int((pad / space).rounded(.down))
                 let head = count / 2
                 let tail = count - head
@@ -697,6 +674,10 @@ enum MenuBarText {
                 }
             }
         }
+        // 所有段（含末段）都在槽内居中，整串可能以空格+kern 收尾。NSStatusBarButton 在真实
+        // 菜单栏里会裁掉尾随空白，被裁的量随两拍不同而变 → 切换时宽度抖动。补一个零宽、非空白
+        // 的 U+200B 收尾守卫：它不占宽、也不算空白，既挡住前面的尾随空格被裁，又让两拍逐像素等宽。
+        line.append(NSAttributedString(string: "\u{200B}", attributes: attributes))
         return line
     }
 

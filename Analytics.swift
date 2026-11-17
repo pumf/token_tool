@@ -291,7 +291,6 @@ enum UsageAnalytics {
         var todayConsumed: Double = 0
         var hasTodayPair = false
         var yesterdayConsumed: Double = 0
-        var yesterdayCovered: TimeInterval = 0
         for index in 1..<points.count {
             let previous = points[index - 1]
             let current = points[index]
@@ -311,14 +310,11 @@ enum UsageAnalytics {
             let consumed = previous.value - current.value
             let endsToday = current.at >= todayStart
             if endsToday { hasTodayPair = true }
-            // 与昨天整天有交集的这一对：交集时长既算「采到的昨天」，也按占比折算昨日消耗；
-            // 跨零点那一对剩下的那半归今日，交集为 0 的对不算昨天。
+            // 与昨天整天有交集的这一对：按交集占比折算昨日消耗；跨零点那一对剩下的那半归今日，
+            // 交集为 0 的对不算昨天。
             let yesterdayOverlap = min(current.at, todayStart) - max(previous.at, yesterdayStart)
-            if yesterdayOverlap > 0 {
-                yesterdayCovered += yesterdayOverlap
-                if consumed > 0 {
-                    yesterdayConsumed += consumed * (yesterdayOverlap / span)
-                }
+            if yesterdayOverlap > 0, consumed > 0 {
+                yesterdayConsumed += consumed * (yesterdayOverlap / span)
             }
             if consumed > 0 {
                 totalConsumed += consumed
@@ -339,9 +335,12 @@ enum UsageAnalytics {
         let netDailyAverage = hasSpan
             ? (totalConsumed - totalReclaimed) / Double(observedDays)
             : nil
-        // 昨天没采满就别说「昨天用了 X」，否则昨天合盖或刚装机时那段消耗查不到，参照会偏小。
-        let yesterdayLength = todayStart - yesterdayStart
-        let hasYesterday = yesterdayLength > 0 && yesterdayCovered >= yesterdayLength * 0.9
+        // 昨日参照的采信条件：昨天只要落在 [yesterdayStart, todayStart) 的采样点有首尾两个
+        // （≥2），就认为这两天把昨天夹住了、差分可信。不再要求按时间覆盖率采满——常规「白天开、
+        // 夜里关」的笔记本昨天只有白天有样本，旧覆盖率门槛会误伤成「无昨日参照」。只有昨天不足
+        // 两个点（刚装机、长期合盖、整天没采到）才不给参照。
+        let yesterdayPoints = points.filter { $0.at >= yesterdayStart && $0.at < todayStart }.count
+        let hasYesterday = yesterdayPoints >= 2
 
         // credits 类 provider 给了 consumed 时，覆盖差分算出来的 todayConsumed。
         // dailyAverage/netDailyAverage 这类长期指标仍走 history 差分（provider 只给今日消耗）。

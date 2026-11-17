@@ -285,17 +285,31 @@ struct AnalyticsSuite {
             expectClose(insight?.yesterdayConsumed, 1200)
             expectClose(insight?.todayConsumed, 120)
         }
-        test("昨天没采满时不给昨日参照") {
-            // 昨天下午才开机，昨天 00:00 到 15:00 那段没有样本，硬给「昨天用了 X」会低估。
+        test("昨天只有白天有样本也给出昨日参照（首尾两点即采信）") {
+            // 昨天 15:00 才开机到 24:00（下午 9 个点），旧的时间覆盖率门槛会误伤成「无参照」；
+            // 新规则只要昨天有首尾两个采样点就采信，给出下午这段的消耗。
             let samples = (0...20).map { hour -> UsageSample in
                 creditSample(at: offset(-21 + Double(hour)), remaining: 2000 - Double(hour) * 30)
             }
             let insight = UsageAnalytics.insight(
                 provider: .qoder, input: creditInput(remaining: 1400), samples: samples, now: noon
             )
-            expectNotNil(insight)
-            expectNil(insight?.yesterdayConsumed)
+            expectNotNil(insight?.yesterdayConsumed)
+            // 昨天 15:00→24:00 共 9 小时、每小时掉 30 → 270。
+            expectClose(insight?.yesterdayConsumed, 270)
             expectClose(insight?.todayConsumed, 330)
+        }
+        test("昨天不足两个采样点时不给昨日参照") {
+            // 昨天只有中午一个点（其余都在今天），夹不住昨天，不给参照。
+            let samples = [
+                creditSample(at: offset(-24), remaining: 1000),   // 昨天 12:00，唯一一个昨日点
+                creditSample(at: offset(-6), remaining: 900),     // 今天 06:00
+                creditSample(at: offset(0), remaining: 800),      // 今天 12:00
+            ]
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 800), samples: samples, now: noon
+            )
+            expectNil(insight?.yesterdayConsumed)
         }
         test("没有样本时不给洞察") {
             let insight = UsageAnalytics.insight(
@@ -1081,11 +1095,33 @@ struct AnalyticsSuite {
                 let today = MenuBarText.compose([credits, wide, noToday], style: style, showsToday: true, font: font)
                 let gap = abs(width(today) - width(remaining))
                 check(gap < 0.05, "\(style) 两拍实测宽度相差 \(gap)pt，补零头没有补齐")
-                // 末段必须以非空白结尾：NSStatusBarButton 自适应会裁掉尾随空格，
-                // 数字结尾才保证两拍按钮宽度逐像素一致、切换不抖。
-                check(remaining.string.last.map { !$0.isWhitespace } == true, "\(style) 剩余拍结尾是空白，会被裁")
-                check(today.string.last.map { !$0.isWhitespace } == true, "\(style) 今日拍结尾是空白，会被裁")
+                // 末段与其余段一样在槽内居中，整串以零宽、非空白的 U+200B 收尾守卫结束：
+                // 它挡住尾随空格被 NSStatusBarButton 裁掉，又保证两拍按钮宽度逐像素一致、切换不抖。
+                check(remaining.string.last == "\u{200B}", "\(style) 剩余拍缺少零宽收尾守卫")
+                check(today.string.last == "\u{200B}", "\(style) 今日拍缺少零宽收尾守卫")
             }
+        }
+        test("末段今日值更窄时也在槽内居中") {
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: NSFont.Weight.semibold)
+            func width(_ s: NSAttributedString) -> CGFloat { s.size().width }
+            // 单独一家、且它是末段：今日「↓3」远窄于剩余「12,345」，居中应让数值两侧补位相近。
+            let only = MenuBarMetric(
+                letter: "T",
+                value: "12,345",
+                compact: "12.3k",
+                percent: "50%",
+                today: "3",
+                todayCompact: "3",
+                fraction: 0.5,
+                tint: Theme.trae
+            )
+            let remaining = MenuBarText.compose([only], style: .classic, showsToday: false, font: font)
+            let today = MenuBarText.compose([only], style: .classic, showsToday: true, font: font)
+            // 两拍整串等宽（槽宽由较宽的剩余拍定死），今日拍把多出来的补位左右平分 → 数值居中。
+            check(abs(width(today) - width(remaining)) < 0.05, "末段两拍宽度不等：\(width(remaining)) vs \(width(today))")
+            // 今日拍在 "T " 之后、"↓3" 之前应有一段左补位（居中而非右对齐的零左补位）。
+            let head = today.string.dropFirst(2).prefix { $0 == " " }.count
+            check(head >= 1, "末段今日值左补位为 \(head)，仍是右对齐未居中")
         }
         test("全部平台算不出今日消耗时滚动不改变文案") {
             let metrics = [credits, noToday].map {
