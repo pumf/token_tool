@@ -28,9 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = store
         self.updates = updates
         self.menuBar = MenuBarController(store: store, updates: updates)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            updates.checkIfNeeded()
-        }
+        updates.startAutoChecks()
     }
 
     private func configureNotificationCategories(_ center: UNUserNotificationCenter) {

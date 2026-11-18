@@ -290,7 +290,7 @@ final class UpdateChecker: ObservableObject {
     private static let repository = "https://github.com/pumf/token_tool"
     private static let endpoint = URL(string: "https://api.github.com/repos/pumf/token_tool/releases/latest")!
     private let session: URLSession
-    private var didAutoCheck = false
+    private var autoCheckTimer: Timer?
     private var resultTask: Task<Void, Never>?
 
     init() {
@@ -352,12 +352,23 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
+    /// 周期检查：12 小时内不重复请求，避免频繁重启变成对 GitHub 的请求轰炸。
     func checkIfNeeded() {
-        guard !didAutoCheck else { return }
-        didAutoCheck = true
         let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
-        guard last == 0 || Date().timeIntervalSince1970 - last >= 86400 else { return }
+        guard last == 0 || Date().timeIntervalSince1970 - last >= 43200 else { return }
         check()
+    }
+
+    /// 菜单栏应用常驻数天不重启，「只在启动时查一次」等于不再查：
+    /// 首检延后 4 秒避开启动高峰，之后每 12 小时自动查一次。
+    func startAutoChecks() {
+        autoCheckTimer?.invalidate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            self?.checkIfNeeded()
+        }
+        autoCheckTimer = Timer.scheduledTimer(withTimeInterval: 43200, repeats: true) { [weak self] _ in
+            self?.checkIfNeeded()
+        }
     }
 
     func checkFromUser() {

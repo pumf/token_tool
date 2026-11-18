@@ -31,7 +31,7 @@ enum Token {
     static let meta = Font.system(size: 10)
     static let caption = Font.system(size: 10)
 
-    static let cardFill = Color(nsColor: .controlBackgroundColor)
+    static let cardFill = Color.primary.opacity(0.05)
     static let cardStroke = Color(nsColor: .separatorColor)
     static let insetFill = Color.primary.opacity(0.04)
     static let hairline: CGFloat = 0.5
@@ -189,10 +189,19 @@ struct UsageBar: View {
     let detail: String
     let fraction: Double
     let tint: Color
+    var lowThreshold: Double? = nil
 
     private var normalized: Double {
         min(max(fraction.isFinite ? fraction : 0, 0), 1)
     }
+
+    /// 剩余低于预警阈值：进度条与数值自动转告警橙，不用点开通知也能看出谁快用完。
+    private var isLow: Bool {
+        guard let lowThreshold else { return false }
+        return (1 - normalized) * 100 <= lowThreshold
+    }
+
+    private var effectiveTint: Color { isLow ? Theme.warning : tint }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Token.spaceTight - 2) {
@@ -202,13 +211,13 @@ struct UsageBar: View {
                 Spacer(minLength: 8)
                 Text(detail)
                     .font(Token.meta)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isLow ? Theme.warning : Color.secondary)
                     .lineLimit(1)
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(tint.opacity(0.13))
-                    Capsule().fill(tint).frame(width: max(3, geometry.size.width * normalized))
+                    Capsule().fill(effectiveTint.opacity(0.13))
+                    Capsule().fill(effectiveTint).frame(width: max(3, geometry.size.width * normalized))
                 }
             }
             .frame(height: 6)
@@ -507,10 +516,6 @@ struct ProviderCard<Detail: View>: View {
         .background(
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .fill(Token.cardFill)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
         )
         .contentShape(RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous))
         .modifier(DoubleClickOpen(action: onDoubleClick, hint: doubleClickHint))
@@ -1157,7 +1162,7 @@ struct MenuContent: View {
                     .font(.system(size: 11, weight: .semibold))
                 Text(
                     failure == nil
-                        ? "上次检查 \(Format.time(updates.lastCheckAt)) · 每 24 小时自动检查一次"
+                        ? "上次检查 \(Format.time(updates.lastCheckAt)) · 每 12 小时自动检查一次"
                         : failure!
                 )
                 .font(Token.caption)
@@ -1245,10 +1250,6 @@ struct MenuContent: View {
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .fill(Token.cardFill)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
-        )
     }
 
     private func reorderableCard(_ descriptor: ProviderDescriptor) -> some View {
@@ -1305,10 +1306,6 @@ struct MenuContent: View {
             RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
                 .fill(Token.cardFill)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .stroke(Token.cardStroke.opacity(0.6), lineWidth: Token.hairline)
-        )
     }
 
     /// 极简模式一家一行：色条导轨、名称、数值、剩余量、口径，明细与预测都不占高度。
@@ -1331,7 +1328,7 @@ struct MenuContent: View {
             minimalGauge(provider, descriptor)
             Text(minimalCaption(provider))
                 .font(Token.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(minimalIsLow(provider) ? Theme.warning : Color.secondary)
                 .frame(width: 48, alignment: .trailing)
                 .lineLimit(1)
         }
@@ -1351,15 +1348,22 @@ struct MenuContent: View {
             Sparkline(values: minimalTrend(provider), tint: descriptor.color, days: 7)
                 .frame(width: 60, height: 12)
         } else {
+            let gaugeTint = minimalIsLow(provider) ? Theme.warning : descriptor.color
             ZStack(alignment: .leading) {
-                Capsule().fill(descriptor.color.opacity(0.13))
+                Capsule().fill(gaugeTint.opacity(0.13))
                 Capsule()
-                    .fill(descriptor.color)
+                    .fill(gaugeTint)
                     .frame(width: max(3, 60 * minimalFraction(provider)))
             }
             .frame(width: 60, height: 6)
             .animation(.easeOut(duration: 0.25), value: minimalFraction(provider))
         }
+    }
+
+    /// 极简模式下剩余低于阈值同样转告警橙；取不到数或出错时不着色。
+    private func minimalIsLow(_ provider: UsageProvider) -> Bool {
+        guard store.alertLowBalance, store.result(for: provider)?.ok == true else { return false }
+        return minimalFraction(provider) * 100 <= store.lowThreshold
     }
 
     private func minimalFraction(_ provider: UsageProvider) -> CGFloat {
@@ -1616,6 +1620,11 @@ struct MenuContent: View {
         return links
     }
 
+    /// 传给 UsageBar 的预警阈值：关闭低余额提醒时保持品牌色，不转语义色。
+    private var barLowThreshold: Double? {
+        store.alertLowBalance ? store.lowThreshold : nil
+    }
+
     /// Qoder 走 CLI 采集，未安装/未登录时把安装与授权动作放进卡片链接里。
     @ViewBuilder
     private func providerContent(_ provider: UsageProvider) -> some View {
@@ -1644,7 +1653,8 @@ struct MenuContent: View {
                         label: "附加额度",
                         detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
                         fraction: addonUsed / addonTotal,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 }
                 if planTotal > 0 {
@@ -1652,7 +1662,8 @@ struct MenuContent: View {
                         label: "套餐额度",
                         detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
                         fraction: planUsed / planTotal,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 }
                 if addonTotal == 0 && planTotal == 0 {
@@ -1678,7 +1689,8 @@ struct MenuContent: View {
                         label: "额度",
                         detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
                         fraction: (result.usedPercent ?? 0) / 100,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                     if let packages = result.packages, packages > 0 {
                         Text("\(packages) 个资源包")
@@ -1727,14 +1739,16 @@ struct MenuContent: View {
                         label: "套餐额度",
                         detail: "已用 \(Format.credits(planUsed)) / \(Format.credits(planTotal))",
                         fraction: planUsed / planTotal,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 } else if addonTotal > 0 {
                     UsageBar(
                         label: "附加额度",
                         detail: "已用 \(Format.credits(addonUsed)) / \(Format.credits(addonTotal))",
                         fraction: addonUsed / addonTotal,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 } else {
                     Text("当前套餐未包含额度")
@@ -1747,7 +1761,8 @@ struct MenuContent: View {
                         label: "额度",
                         detail: "已用 \(Format.credits(result.used)) / \(Format.credits(total))",
                         fraction: (result.usedPercent ?? 0) / 100,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 } else {
                     Text("暂无可用的额度资源包")
@@ -1776,7 +1791,8 @@ struct MenuContent: View {
                         label: "\(Format.window(window.windowMinutes))窗口",
                         detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
                         fraction: (window.usedPercent ?? 0) / 100,
-                        tint: descriptor.color
+                        tint: descriptor.color,
+                        lowThreshold: barLowThreshold
                     )
                 }
                 if let reset = windows.first?.resetsAt {
@@ -1824,7 +1840,8 @@ struct MenuContent: View {
                     label: "\(Format.window(window.windowMinutes))窗口",
                     detail: "已用 \(Format.percent(window.usedPercent)) · 剩余 \(Format.percent(window.remainingPercent))",
                     fraction: (window.usedPercent ?? 0) / 100,
-                    tint: provider.descriptor.color
+                    tint: provider.descriptor.color,
+                    lowThreshold: barLowThreshold
                 )
             } else {
                 Text("当前账号没有限额窗口")
@@ -2154,8 +2171,9 @@ struct MenuContent: View {
         .help("低于 \(value)% 时提醒，恢复至 \(value + Int(UsageAnalytics.lowRecoveryGap))% 以上后重新布防")
     }
 
-    /// 设置区 chip 的统一外观：选中/开启用主题色标注（彩色文字 + 浅色胶囊底 + 彩色描边），
-    /// 未选/关闭灰字 + inset 底 + 淡描边。密度、样式、阈值与逐平台开关都共用这一套。
+    /// 设置区 chip 的统一外观：选中/开启用系统强调色实底胶囊（跟随用户的系统外观设置），
+    /// 与 Qoder 品牌蓝解耦；未选/关闭灰字 + inset 底 + 淡描边。
+    /// 密度、样式、阈值与逐平台开关都共用这一套。
     @ViewBuilder
     private func chipSurface<LabelView: View>(
         active: Bool,
@@ -2166,13 +2184,13 @@ struct MenuContent: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .fixedSize()
-            .foregroundStyle(active ? Theme.qoder : Color.secondary)
+            .foregroundStyle(active ? Color(nsColor: .alternateSelectedControlTextColor) : Color.secondary)
             .background(
-                Capsule().fill(active ? Theme.qoder.opacity(0.14) : Token.insetFill)
+                Capsule().fill(active ? Color.accentColor : Token.insetFill)
             )
             .overlay(
                 Capsule().stroke(
-                    active ? Theme.qoder.opacity(0.28) : Token.cardStroke.opacity(0.5),
+                    active ? Color.clear : Token.cardStroke.opacity(0.5),
                     lineWidth: Token.hairline
                 )
             )
@@ -2336,7 +2354,7 @@ struct MenuContent: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("上次检查 \(Format.ago(updates.lastCheckAt))；每 24 小时自动检查一次，点击立即重新检查")
+            .help("上次检查 \(Format.ago(updates.lastCheckAt))；每 12 小时自动检查一次，点击立即重新检查")
         case .failed(let message):
             Button("重试检查") {
                 updates.checkFromUser()
@@ -2417,7 +2435,7 @@ struct MenuPanel: View {
                 )
         }
         .frame(width: Token.panelWidth, height: panelHeight)
-        .background(.regularMaterial)
+        .background(.ultraThinMaterial)
         .onPreferenceChange(PanelContentHeightKey.self) { height in
             let rounded = ceil(height)
             guard rounded > 0, abs(rounded - contentHeight) > 0.5 else { return }
