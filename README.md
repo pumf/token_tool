@@ -1,10 +1,10 @@
-# TokenTool
+# AI 余量（TokenTool）
 
-macOS 顶部菜单栏 AI 用量监控工具，实时查看 **Qoder**、**WorkBuddy**、**Codex**、**Claude Code**、**Trae** 的额度与剩余用量。
+macOS 顶部菜单栏的 AI 额度监控工具，实时查看 **Qoder**、**WorkBuddy**、**Codex**、**Claude Code**、**Trae** 的额度与剩余用量。
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.8**（build 32） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.9**（build 33） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -169,7 +169,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.8` | 当前安装版本 |
+| `v1.8.9` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -179,7 +179,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 ### 版本与更新
 
-- 应用启动后及面板打开时会检查更新，自动检查最多每 24 小时一次；底部按钮可随时手动检查。
+- 应用每次启动都会自动检查一次更新（延后 4 秒避开启动高峰）；常驻运行期间最多每 12 小时检查一次，面板打开时也会按此节奏补查；底部按钮可随时手动检查。
 - 优先请求 GitHub Releases API；若 API 被限流或不可用，会自动回退到发布页，不要求登录或 Token。
 - 发现新版本时，面板顶部显示「新版本 x.y.z 可用」，并下载与当前芯片匹配的安装包：arm64 选 `-arm64.dmg`，Intel 选 `-x86_64.dmg`，找不到时使用通用 DMG。
 - 安装包地址确定后，额外拉取该 Release 的 `SHA256SUMS` 资产解析校验值（网页回退路径同样可校验）；若该 Release 未提供 `SHA256SUMS`，则退回读取 Release 说明中的「校验」表。下载完成后比对 SHA-256：一致则标注「SHA-256 已校验」并把按钮换成「安装并重启」，不一致则删除安装包并提示；两者都取不到时保留安装包，但明确标注「SHA-256 未校验 · 需确认后才会打开」，点按会先弹出确认框，不再静默跳过。
@@ -209,11 +209,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.8-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.8-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.8.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.8/TokenTool-1.8.8.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.9-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.9-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.9.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.8/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.9/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -334,7 +334,7 @@ Trae 目前没有对外提供的用量 CLI、app-server 或本机 IPC 通道，�
 | 卡片显示「采集超时」或「需要 python3」 | 先按提示排除环境问题再点「刷新」；连续失败会自动退避重试，失败细节可在底部「诊断」打开的日志里查看 |
 | 菜单栏找不到应用 | 确认未全部隐藏（全部隐藏时显示 `AI`）；或重新启动应用 |
 | 开机启动无效 | 面板开关读的是 launchd 的实际注册状态；若 `~/Library/LaunchAgents/com.local.tokentool.plist` 被手动删除或 `bootout` 过，开关会显示为关闭，在面板重新打开一次即可 |
-| 没有收到提醒 | 在「系统设置 → 通知」中允许 TokenTool / AI 用量 的通知权限；面板出现提示时点击「去开启」 |
+| 没有收到提醒 | 在「系统设置 → 通知」中允许 AI 余量 的通知权限；面板出现提示时点击「去开启」 |
 | 检查更新失败 | 确认网络或系统代理可访问 GitHub；应用在 API 限流时会自动回退发布页，稍后点「重试检查」即可 |
 | 更新下载后如何安装 | SHA-256 校验通过且应用装在 `/Applications/TokenTool.app` 时，直接点「安装并重启」，替换与回滚都在应用内完成；其余情况（校验值缺失、从「下载」目录或 DMG 里运行）点按只会打开 DMG，需要手动把 TokenTool 拖入「应用程序」覆盖旧版本 |
 | 已是最新但 Release 有更新 | 点击底部「已是最新」重新检查；若仍不生效，确认版本号大于当前安装版本 |
@@ -381,6 +381,17 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.8.9
+
+> 2026-11-19 发布。
+
+- **深色主题适配**：进度条底槽、迷你图空态与极简表盘底色改用系统主色（`Color.primary` 12% 透明度），深浅色自动切换；波形背景在深色下自动降低不透明度（×0.55），不再在深灰面板上过饱和刺眼。卡片、设置区、选中态走系统语义色，本就天生适配。
+- **设置面板折叠分组**：四组设置（智能预警 / 界面 / 菜单栏 / 提醒）改为手风琴折叠，默认只展开「智能预警」，其余收起成一行标题并实时显示当前值摘要（如「低额度 20% · 重置前耗尽」「5/5 开」）。非极简模式展开设置不再把面板顶出一屏滚动条。
+- **启动必查一次更新**：启动首检不再走 12 小时节流，每次启动（含自动更新重启后）都先查一次；常驻期间仍每 12 小时一轮。更新文案与实际节奏对齐（修掉残留的「每 24 小时」旧说法）。
+- **修复偶发点外面不关**：`.transient` 失焦关闭依赖弹窗窗口抢到 key，`show()` 返回后立刻 `makeKey` 会与展示动画竞态、偶发失败。现在抢 key 挪到 `popoverDidShow`，并加装鼠标事件监听兜底（展示期间安装、关闭即拆）——点击弹窗之外任何位置必定关闭。
+- **展示名更名「AI 余量」**：`CFBundleDisplayName`、Info.plist 权限说明与 README 标题改为「AI 余量」；bundle id、可执行文件名与安装路径不变，设置、通知授权与自动更新链路不受影响。
+- **测试**：Swift 271 项、Python 125 项全部通过。
 
 ### 1.8.8
 
@@ -655,7 +666,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.8（build 32） |
+| 当前版本 | 1.8.9（build 33） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

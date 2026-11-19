@@ -360,14 +360,15 @@ final class UpdateChecker: ObservableObject {
     }
 
     /// 菜单栏应用常驻数天不重启，「只在启动时查一次」等于不再查：
-    /// 首检延后 4 秒避开启动高峰，之后每 12 小时自动查一次。
+    /// 首检延后 4 秒避开启动高峰且不设节流（每次启动必查一次），
+    /// 之后每 12 小时自动查一次；周期内检查才走 12 小时节流。
     func startAutoChecks() {
         autoCheckTimer?.invalidate()
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            self?.checkIfNeeded()
+            self?.check()
         }
         autoCheckTimer = Timer.scheduledTimer(withTimeInterval: 43200, repeats: true) { [weak self] _ in
-            self?.checkIfNeeded()
+            Task { @MainActor in self?.checkIfNeeded() }
         }
     }
 

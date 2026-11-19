@@ -79,6 +79,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
 final class MenuBarController: NSObject, NSPopoverDelegate {
     private let store: UsageStore
     private let updates: UpdateChecker
+    private let motion: PanelMotion
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
     private let hostingView: NSHostingView<MenuPanel>
@@ -92,10 +93,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var hotKey: GlobalHotKey?
 
     init(store: UsageStore, updates: UpdateChecker) {
+        let motion = PanelMotion()
         self.store = store
         self.updates = updates
+        self.motion = motion
         self.hostingView = NSHostingView(
-            rootView: MenuPanel(store: store, updates: updates, maxHeight: 700)
+            rootView: MenuPanel(store: store, updates: updates, motion: motion, maxHeight: 700)
         )
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -164,16 +167,61 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         updateTitle()
         updateContentSize()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        motion.isVisible = true
+        installOutsideClickMonitors()
         // 应用是 accessory 身份，不激活的话弹窗永远拿不到 key 窗口：
         // 1）面板接不住键盘（预算输入框等）；
         // 2）transient 的「点外面关闭」靠「失焦」触发，窗口没成为 key 就永远等不到。
-        // 激活应用并让弹窗抢焦点，鼠标点击与热键两条路径共用同一行为。
+        // 激活并抢 key 的时机放在 popoverDidShow 里：show() 刚返回时弹窗窗口
+        // 可能仍在展示动画中，此刻 makeKey 偶发失败，之后点哪里都不会失焦。
         NSApp.activate(ignoringOtherApps: true)
-        popover.contentViewController?.view.window?.makeKey()
         DispatchQueue.main.async { [weak self] in
             self?.resizeIfNeeded()
         }
         store.refreshStaleForPanel()
+    }
+
+    /// 兜底关闭：transient 失焦链路偶发失效（key 竞态），用鼠标事件监听保证
+    /// 「点击弹窗之外一定关闭」。全局监听收其他应用的点击，本地监听收自家
+    /// 应用内落在弹窗与状态栏图标之外的点击。展示期间安装，关闭即拆。
+    private var outsideClickMonitors: [Any] = []
+
+    private func installOutsideClickMonitors() {
+        guard outsideClickMonitors.isEmpty else { return }
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        let global = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            self?.closePopoverIfShown()
+        }
+        let local = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.closePopoverIfClickOutside(event)
+            return event
+        }
+        if let global { outsideClickMonitors.append(global) }
+        if let local { outsideClickMonitors.append(local) }
+    }
+
+    private func removeOutsideClickMonitors() {
+        outsideClickMonitors.forEach { NSEvent.removeMonitor($0) }
+        outsideClickMonitors.removeAll()
+    }
+
+    private func closePopoverIfShown() {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+    }
+
+    private func closePopoverIfClickOutside(_ event: NSEvent) {
+        guard popover.isShown else { return }
+        // 弹窗内容与状态栏图标各有正常处理路径；点自家其余区域视为外部点击。
+        if let popoverWindow = popover.contentViewController?.view.window,
+           event.window === popoverWindow {
+            return
+        }
+        if let buttonWindow = statusItem.button?.window,
+           event.window === buttonWindow {
+            return
+        }
+        closePopoverIfShown()
     }
 
     /// 热键展开时应用可能不在前台；激活逻辑已统一进 togglePopover，这里只做转发。
@@ -189,8 +237,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
+    func popoverDidShow(_ notification: Notification) {
+        // 窗口真正挂出来之后再抢 key，避开 show() 期间的展示竞态。
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
     func popoverDidClose(_ notification: Notification) {
         lastCloseAt = Date()
+        motion.isVisible = false
+        removeOutsideClickMonitors()
     }
 
     private func updateTitle() {
@@ -299,7 +355,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func makePanel(maxHeight: CGFloat) -> MenuPanel {
-        MenuPanel(store: store, updates: updates, maxHeight: maxHeight) { [weak self] height in
+        MenuPanel(store: store, updates: updates, motion: motion, maxHeight: maxHeight) { [weak self] height in
             guard let self else { return }
             self.measuredPanelHeight = height
             // 回调发生在 SwiftUI 布局中，等这一轮布局结束再改弹窗尺寸。

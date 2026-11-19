@@ -5,11 +5,11 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>AI 用量</string>
+	<string>AI 余量</string>
 	<key>CFBundleExecutable</key>
 	<string>TokenTool</string>
 	<key>CFBundleGetInfoString</key>
-	<string>TokenTool 1.6.5 · MIT License</string>
+	<string>AI 余量 · MIT License</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -21,9 +21,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.8.8</string>
+	<string>1.8.9</string>
 	<key>CFBundleVersion</key>
-	<string>32</string>
+	<string>33</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>LSUIElement</key>
@@ -35,8 +35,8 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>TokenTool 需要向本机 AI 客户端发送控制指令，用于额度采集与客户端重启。</string>
+	<string>AI 余量 需要向本机 AI 客户端发送控制指令，用于额度采集与客户端重启。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>TokenTool 本身不读取照片；个别 AI 客户端在本机采集时可能触发系统媒体授权，此说明用于解释弹窗来由。</string>
+	<string>AI 余量 本身不读取照片；个别 AI 客户端在本机采集时可能触发系统媒体授权，此说明用于解释弹窗来由。</string>
 </dict>
 </plist>

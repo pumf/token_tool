@@ -31,11 +31,49 @@ enum Token {
     static let meta = Font.system(size: 10)
     static let caption = Font.system(size: 10)
 
-    static let cardFill = Color.primary.opacity(0.05)
+    /// 卡片底走「磨砂面板」而不是灰色蒙版：压在冷色波形上不会发灰，边界也更干净。
+    static let cardFill = Color(nsColor: .controlBackgroundColor).opacity(0.72)
+    /// 次级容器（设置区等）用更弱的一层，和数据卡片拉出层级。
+    static let insetPanelFill = Color(nsColor: .controlBackgroundColor).opacity(0.45)
     static let cardStroke = Color(nsColor: .separatorColor)
     static let insetFill = Color.primary.opacity(0.04)
     static let hairline: CGFloat = 0.5
     static let detailMinHeight: CGFloat = 72
+}
+
+extension View {
+    /// 数据卡片：磨砂底 + 可选品牌色微染 + 发丝描边；borderTint 用于低余量告警。
+    func cardSurface(tint: Color? = nil, borderTint: Color? = nil) -> some View {
+        background(
+            ZStack {
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                    .fill(Token.cardFill)
+                if let tint {
+                    RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                        .fill(tint.opacity(0.05))
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                    .strokeBorder(
+                        borderTint?.opacity(0.7) ?? Color.primary.opacity(0.16),
+                        lineWidth: 0.75
+                    )
+            )
+        )
+    }
+
+    /// 次级容器：同一材质但更轻，且不抢主卡片的层级。
+    func insetSurface() -> some View {
+        background(
+            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                .fill(Token.insetPanelFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
+                        .strokeBorder(Token.cardStroke.opacity(0.35), lineWidth: Token.hairline)
+                )
+        )
+    }
 }
 
 enum Format {
@@ -216,7 +254,7 @@ struct UsageBar: View {
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(effectiveTint.opacity(0.13))
+                    Capsule().fill(Color.primary.opacity(0.12))
                     Capsule().fill(effectiveTint).frame(width: max(3, geometry.size.width * normalized))
                 }
             }
@@ -257,7 +295,7 @@ struct Sparkline: View {
                         .position(last)
                 } else {
                     Capsule()
-                        .fill(tint.opacity(0.12))
+                        .fill(Color.primary.opacity(0.12))
                         .frame(height: 2)
                         .frame(maxHeight: .infinity)
                 }
@@ -347,6 +385,8 @@ struct ProviderCard<Detail: View>: View {
     let subtitle: String
     let icon: String
     let color: Color
+    /// 低余量时只把边框和微染换成告警色，不做整卡上色。
+    let isLow: Bool
     let plan: String?
     let value: String
     let valueCaption: String
@@ -368,6 +408,7 @@ struct ProviderCard<Detail: View>: View {
         subtitle: String,
         icon: String,
         color: Color,
+        isLow: Bool = false,
         plan: String? = nil,
         value: String,
         valueCaption: String,
@@ -385,6 +426,7 @@ struct ProviderCard<Detail: View>: View {
         self.subtitle = subtitle
         self.icon = icon
         self.color = color
+        self.isLow = isLow
         self.plan = plan
         self.value = value
         self.valueCaption = valueCaption
@@ -513,9 +555,9 @@ struct ProviderCard<Detail: View>: View {
             }
         }
         .padding(compact ? Token.spaceTight + 4 : Token.spaceCard)
-        .background(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .fill(Token.cardFill)
+        .cardSurface(
+            tint: isLow ? Theme.warning : color,
+            borderTint: isLow ? Theme.warning : nil
         )
         .contentShape(RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous))
         .modifier(DoubleClickOpen(action: onDoubleClick, hint: doubleClickHint))
@@ -835,10 +877,30 @@ enum MenuBarGlyph {
     }
 }
 
+/// 设置面板的折叠分组：默认只展开最常改的一组，其余按需点开，控制面板展开后的总高度。
+private enum SettingsGroup: String, CaseIterable, Identifiable {
+    case alerts
+    case interface
+    case menuBar
+    case reminders
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .alerts: return "智能预警"
+        case .interface: return "界面"
+        case .menuBar: return "菜单栏"
+        case .reminders: return "提醒"
+        }
+    }
+}
+
 struct MenuContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var updates: UpdateChecker
     @State private var settingsExpanded: Bool
+    @State private var expandedGroups: Set<SettingsGroup> = [.alerts]
 
     init(store: UsageStore, updates: UpdateChecker, settingsExpanded: Bool = false) {
         self.store = store
@@ -872,7 +934,7 @@ struct MenuContent: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("AI 用量")
+                Text("AI 余量")
                     .font(.system(size: 16, weight: .bold))
                 if !store.minimalMode {
                     Text(store.panelProviders.map(\.displayName).joined(separator: " · "))
@@ -957,14 +1019,13 @@ struct MenuContent: View {
     }
 
     private var settingsPanel: some View {
-        VStack(alignment: .leading, spacing: Token.spaceRow) {
-            interfaceSettings
-            Divider()
-            menuBarSettings
-            Divider()
-            reminderSettings
-            Divider()
-            alertSettings
+        VStack(alignment: .leading, spacing: Token.spaceTight) {
+            ForEach(SettingsGroup.allCases) { group in
+                settingsGroup(group)
+                if group != SettingsGroup.allCases.last {
+                    Divider()
+                }
+            }
             if store.notificationsDenied {
                 HStack(spacing: 4) {
                     Image(systemName: "bell.slash.fill")
@@ -983,11 +1044,85 @@ struct MenuContent: View {
             }
         }
         .padding(Token.spaceTight + 2)
-        .background(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .fill(Token.insetFill)
-        )
+        .insetSurface()
         .transition(.opacity)
+    }
+
+    /// 单个折叠分组：标题行带箭头与当前值摘要，展开后才是原有的设置行。
+    @ViewBuilder
+    private func settingsGroup(_ group: SettingsGroup) -> some View {
+        let isExpanded = expandedGroups.contains(group)
+        VStack(alignment: .leading, spacing: Token.spaceRow) {
+            Button {
+                toggleSettingsGroup(group)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundStyle(.secondary)
+                    Text(group.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(groupSummary(group))
+                        .font(Token.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "收起\(group.title)设置" : "展开\(group.title)设置")
+            if isExpanded {
+                VStack(alignment: .leading, spacing: Token.spaceRow) {
+                    settingsGroupBody(group)
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func toggleSettingsGroup(_ group: SettingsGroup) {
+        if expandedGroups.contains(group) {
+            expandedGroups.remove(group)
+        } else {
+            expandedGroups.insert(group)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsGroupBody(_ group: SettingsGroup) -> some View {
+        switch group {
+        case .alerts: alertSettings
+        case .interface: interfaceSettings
+        case .menuBar: menuBarSettings
+        case .reminders: reminderSettings
+        }
+    }
+
+    /// 折叠时也让人看到当前值：每组标题右侧的一小段摘要。
+    private func groupSummary(_ group: SettingsGroup) -> String {
+        switch group {
+        case .alerts:
+            var parts: [String] = []
+            if store.alertLowBalance { parts.append("低额度 \(store.lowBalanceThreshold)%") }
+            if store.alertExhaustion { parts.append("重置前耗尽") }
+            if store.alertAcceleration { parts.append("消耗加速") }
+            return parts.isEmpty ? "全部关闭" : parts.joined(separator: " · ")
+        case .interface:
+            return "\(store.density.title) · \(store.hotKeyEnabled ? "⌥⇧T 开" : "⌥⇧T 关")"
+        case .menuBar:
+            var parts = [store.menuBarStyle.title]
+            if store.menuBarHighlight { parts.append("高亮") }
+            if store.menuBarBlink { parts.append("闪动") }
+            return parts.joined(separator: " · ")
+        case .reminders:
+            let enabled = store.orderedProviders.filter { store.isReminderEnabled($0.id) }.count
+            return "\(enabled)/\(store.orderedProviders.count) 开"
+        }
     }
 
     @ViewBuilder
@@ -1162,7 +1297,7 @@ struct MenuContent: View {
                     .font(.system(size: 11, weight: .semibold))
                 Text(
                     failure == nil
-                        ? "上次检查 \(Format.time(updates.lastCheckAt)) · 每 12 小时自动检查一次"
+                        ? "上次检查 \(Format.time(updates.lastCheckAt)) · 启动时检查，常驻期间每 12 小时一次"
                         : failure!
                 )
                 .font(Token.caption)
@@ -1246,10 +1381,7 @@ struct MenuContent: View {
         }
         .padding(Token.spaceCard)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .fill(Token.cardFill)
-        )
+        .cardSurface()
     }
 
     private func reorderableCard(_ descriptor: ProviderDescriptor) -> some View {
@@ -1302,10 +1434,7 @@ struct MenuContent: View {
             minimalFooter
         }
         .padding(.vertical, Token.spaceRow - 2)
-        .background(
-            RoundedRectangle(cornerRadius: Token.radiusCard, style: .continuous)
-                .fill(Token.cardFill)
-        )
+        .cardSurface()
     }
 
     /// 极简模式一家一行：色条导轨、名称、数值、剩余量、口径，明细与预测都不占高度。
@@ -1350,7 +1479,7 @@ struct MenuContent: View {
         } else {
             let gaugeTint = minimalIsLow(provider) ? Theme.warning : descriptor.color
             ZStack(alignment: .leading) {
-                Capsule().fill(gaugeTint.opacity(0.13))
+                Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
                     .fill(gaugeTint)
                     .frame(width: max(3, 60 * minimalFraction(provider)))
@@ -1523,6 +1652,7 @@ struct MenuContent: View {
             subtitle: descriptor.subtitle,
             icon: descriptor.icon,
             color: descriptor.color,
+            isLow: cardIsLow(provider),
             plan: Format.plan(store.result(for: provider)?.plan),
             value: cardValue(provider),
             valueCaption: cardCaption(provider),
@@ -1623,6 +1753,20 @@ struct MenuContent: View {
     /// 传给 UsageBar 的预警阈值：关闭低余额提醒时保持品牌色，不转语义色。
     private var barLowThreshold: Double? {
         store.alertLowBalance ? store.lowThreshold : nil
+    }
+
+    /// 卡片边框只在低余额提醒开启、且确实低于阈值时转告警色。
+    private func cardIsLow(_ provider: UsageProvider) -> Bool {
+        guard store.alertLowBalance,
+              let result = store.result(for: provider),
+              result.ok == true else { return false }
+        let percent: Double?
+        switch provider.quotaKind {
+        case .credits: percent = creditsRemainingPercent(result)
+        case .percentWindow: percent = result.primaryWindow?.remainingPercent
+        }
+        guard let percent else { return false }
+        return percent <= store.lowThreshold
     }
 
     /// Qoder 走 CLI 采集，未安装/未登录时把安装与授权动作放进卡片链接里。
@@ -2313,7 +2457,7 @@ struct MenuContent: View {
                     .foregroundStyle(.quaternary)
                 Text("检查于 \(Format.ago(lastCheckAt))")
                     .foregroundStyle(.tertiary)
-                    .help("GitHub Releases 检查节奏为每 24 小时一次，也可点击右侧按钮立即检查")
+                    .help("GitHub Releases 检查节奏：每次启动查一次，常驻期间每 12 小时一次；也可点击右侧按钮立即检查")
             }
             Spacer(minLength: 4)
             updateControl
@@ -2354,7 +2498,7 @@ struct MenuContent: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("上次检查 \(Format.ago(updates.lastCheckAt))；每 12 小时自动检查一次，点击立即重新检查")
+            .help("上次检查 \(Format.ago(updates.lastCheckAt))；启动时自动检查，常驻期间每 12 小时一次，点击立即重新检查")
         case .failed(let message):
             Button("重试检查") {
                 updates.checkFromUser()
@@ -2419,6 +2563,7 @@ struct MenuContent: View {
 struct MenuPanel: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var updates: UpdateChecker
+    @ObservedObject var motion: PanelMotion
     let maxHeight: CGFloat
     var onHeightChange: ((CGFloat) -> Void)? = nil
 
@@ -2426,13 +2571,16 @@ struct MenuPanel: View {
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: contentHeight > maxHeight + 0.5) {
-            MenuContent(store: store, updates: updates)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: PanelContentHeightKey.self, value: proxy.size.height)
-                    }
-                )
+        ZStack(alignment: .top) {
+            WaveBackdrop(isActive: motion.isVisible)
+            ScrollView(.vertical, showsIndicators: contentHeight > maxHeight + 0.5) {
+                MenuContent(store: store, updates: updates)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: PanelContentHeightKey.self, value: proxy.size.height)
+                        }
+                    )
+            }
         }
         .frame(width: Token.panelWidth, height: panelHeight)
         .background(.ultraThinMaterial)
@@ -2447,6 +2595,77 @@ struct MenuPanel: View {
     private var panelHeight: CGFloat {
         guard contentHeight > 0 else { return maxHeight }
         return min(contentHeight, maxHeight)
+    }
+}
+
+/// 面板可见性：弹窗关闭后暂停背景动效，避免常驻刷新占 CPU。
+final class PanelMotion: ObservableObject {
+    @Published var isVisible = false
+}
+
+/// 面板底层的三层正弦波背景。周期、振幅各不相同，透明度压得很低，只做氛围不抢读数。
+struct WaveBackdrop: View {
+    let isActive: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    private struct Layer {
+        let color: Color
+        let base: CGFloat
+        let amplitude: CGFloat
+        let waves: Double
+        let speed: Double
+        let opacity: Double
+    }
+
+    /// 深色下降低品牌色波形的不透明度，避免在深灰面板上过饱和刺眼。
+    private var layers: [Layer] {
+        let dimFactor: Double = colorScheme == .dark ? 0.55 : 1.0
+        return [
+            Layer(color: Theme.qoder, base: 0.52, amplitude: 12, waves: 1.6, speed: 0.09, opacity: 0.24 * dimFactor),
+            Layer(color: Theme.trae, base: 0.65, amplitude: 16, waves: 1.25, speed: 0.14, opacity: 0.20 * dimFactor),
+            Layer(color: Theme.qoder, base: 0.78, amplitude: 20, waves: 1.0, speed: 0.19, opacity: 0.16 * dimFactor)
+        ]
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isActive || reduceMotion)) { timeline in
+            Canvas { graphics, size in
+                let seconds = reduceMotion ? 1.6 : timeline.date.timeIntervalSinceReferenceDate
+                paint(in: &graphics, size: size, seconds: seconds)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func paint(in graphics: inout GraphicsContext, size: CGSize, seconds: Double) {
+        guard size.width > 1, size.height > 1 else { return }
+        for layer in layers {
+            let phase = seconds * layer.speed * 2 * .pi
+            let baseY = size.height * layer.base
+
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: size.height))
+            var x: CGFloat = 0
+            while x <= size.width {
+                let angle = Double(x / size.width) * 2 * .pi * layer.waves + phase
+                let y = baseY + CGFloat(sin(angle)) * layer.amplitude
+                path.addLine(to: CGPoint(x: x, y: y))
+                x += 3
+            }
+            path.addLine(to: CGPoint(x: size.width, y: size.height))
+            path.closeSubpath()
+
+            graphics.fill(
+                path,
+                with: .linearGradient(
+                    Gradient(colors: [layer.color.opacity(layer.opacity), layer.color.opacity(0.01)]),
+                    startPoint: CGPoint(x: 0, y: baseY - layer.amplitude),
+                    endPoint: CGPoint(x: 0, y: size.height)
+                )
+            )
+        }
     }
 }
 
