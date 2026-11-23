@@ -1044,7 +1044,18 @@ TRAE_CDP_NUMBER_MAX = 1_000_000
 TRAE_JWT_TOKEN_PATH = HOME / ".trae-cn" / "trae-jwt-token"
 # 国际版 Trae（英文版）的登录态与数据目录都不同；JWT 读取按存在性逐级回退。
 TRAE_JWT_TOKEN_PATHS = [TRAE_JWT_TOKEN_PATH, HOME / ".trae" / "trae-jwt-token"]
-TRAE_API_URL = "https://api.trae.cn/trae/api/v2/pay/ide_user_ent_usage"
+
+
+def trae_api_url():
+    """按数据目录存在性选 API 域名：CN 版 api.trae.cn，国际版 api.trae.ai。
+
+    两者都存在时优先 CN 版（国内用户更常见）；都不存在回退到 CN。
+    """
+    cn_dir = HOME / ".trae-cn"
+    intl_dir = HOME / ".trae"
+    if cn_dir.is_dir() or not intl_dir.is_dir():
+        return "https://api.trae.cn/trae/api/v2/pay/ide_user_ent_usage"
+    return "https://api.trae.ai/trae/api/v2/pay/ide_user_ent_usage"
 
 
 def trae_read_jwt():
@@ -1061,21 +1072,24 @@ def trae_read_jwt():
 
 def trae_save_jwt(token):
     """把从网络层抓到的 JWT 原子落盘（0600），下次采集 fetch 主路径即可用。
-    token 一般长期有效，写一次就够了；内容没变不重写。"""
-    target = TRAE_JWT_TOKEN_PATHS[0]
-    try:
-        if target.is_file() and target.read_text(encoding="utf-8").strip() == token:
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+
+    token 一般长期有效，写一次就够了；内容没变不重写。
+    CN 版与国际版 Trae 数据目录不同，抓到后两个路径都写，哪版 Trae 先启都能用。
+    """
+    for target in TRAE_JWT_TOKEN_PATHS:
         try:
-            os.write(fd, token.encode("utf-8"))
-        finally:
-            os.close(fd)
-        os.replace(tmp, target)
-    except OSError:
-        pass
+            if target.is_file() and target.read_text(encoding="utf-8").strip() == token:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, token.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, target)
+        except OSError:
+            pass
 
 
 # 测试里设 TOKENTOOL_DISABLE_CDP=1 跳过 CDP 层，避免误连真机
@@ -1484,7 +1498,7 @@ def trae_cdp_fetch_api(port=TRAE_CDP_PORT):
         except Exception:
             continue
         try:
-            js = TRAE_FETCH_API_JS % (json.dumps(token), TRAE_API_URL)
+            js = TRAE_FETCH_API_JS % (json.dumps(token), trae_api_url())
             result = cdp.evaluate(js, timeout=15.0, await_promise=True)
         except Exception:
             continue
@@ -1516,8 +1530,12 @@ def trae_collect_cdp(port=TRAE_CDP_PORT):
        请求（git 轮询等），抓到即落盘，下一轮 fetch 主路径就能给出总额与已用；
     4. 被动监听轮询——概率兜底。
     """
-    # 主路径：fetch API
+    # 主路径：fetch API（JWT 已存在时做一次瞬态重试，避免 CDP 刚启动时
+    # 因 target 列表还没就绪直接降级到只有余额的 DOM 探针）
     result = trae_cdp_fetch_api(port)
+    if result is None and trae_read_jwt() is not None:
+        time.sleep(2.0)
+        result = trae_cdp_fetch_api(port)
     if result is not None:
         return result
 

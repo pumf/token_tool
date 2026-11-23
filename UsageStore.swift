@@ -124,6 +124,43 @@ final class UsageStore: ObservableObject {
 
     private var refreshTimers: [Timer] = []
 
+    /// 首次升级到新版本时执行一次性迁移。用 UserDefaults 里的 lastRunVersion 标记
+    /// 已执行过，避免每次启动都跑。迁移要放在任何依赖被迁移值的逻辑之前。
+    private static func runMigrationsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let lastRun = defaults.string(forKey: "migration.lastRunVersion") ?? ""
+        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        // 只在 lastRun 早于当前版本时跑迁移，然后把 lastRun 记成当前。
+        // 用简单字典按版本号升序排列判断先后（TokenTool 版本号一直是 x.y.z，够用）。
+        let migrationHistory: [(version: String, block: () -> Void)] = [
+            ("1.8.10", {
+                // Trae 取消了每日签到活动：关掉 reminder.trae.claim 开关
+                defaults.set(false, forKey: "reminder.trae.claim")
+                // 同时清掉已经排出去的每日签到通知（如果有）
+                UNUserNotificationCenter.current().removePendingNotificationRequests(
+                    withIdentifiers: ["reminder.trae.claim"]
+                )
+            }),
+        ]
+        for entry in migrationHistory where compareVersion(entry.version, lastRun) > 0 {
+            entry.block()
+        }
+        defaults.set(current, forKey: "migration.lastRunVersion")
+    }
+
+    /// 版本号比较：a > b 返回正数，相等返回 0，a < b 返回负数。
+    private static func compareVersion(_ a: String, _ b: String) -> Int {
+        let pa = a.split(separator: ".").compactMap { Int($0) }
+        let pb = b.split(separator: ".").compactMap { Int($0) }
+        let n = max(pa.count, pb.count)
+        for i in 0..<n {
+            let va = i < pa.count ? pa[i] : 0
+            let vb = i < pb.count ? pb[i] : 0
+            if va != vb { return va - vb }
+        }
+        return 0
+    }
+
     private static func storedFlag(_ key: String) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? true
     }
@@ -171,6 +208,7 @@ final class UsageStore: ObservableObject {
             menuBarVisibility[descriptor.id] = UserDefaults.standard.object(forKey: descriptor.menuBarDefaultsKey) as? Bool ?? descriptor.defaultInMenuBar
             reminderVisibility[descriptor.id] = Self.storedFlag(descriptor.reminderDefaultsKey)
         }
+        Self.runMigrationsIfNeeded()
         loadCache()
         loadHistory()
         seedHistoryFromCache()
@@ -1029,7 +1067,24 @@ final class UsageStore: ObservableObject {
         if error(for: provider) != nil {
             Diagnostics.record("collector", "\(provider.displayName) 数据恢复")
         }
-        states[provider]?.result = result
+        // 降级结果合并：新采集只有 remaining（source="trae-cdp" 或 DOM 探针）但
+        // 缓存里有完整数据（total/usedPercent）时，保留旧的完整字段，避免瞬态
+        // 失败把总额度和进度条冲掉。下一轮 fetch 成功会自然恢复。
+        if let prev = states[provider]?.result,
+           result.remaining != nil,
+           result.total == nil, result.used == nil, result.usedPercent == nil,
+           (prev.total != nil || prev.usedPercent != nil) {
+            var merged = result
+            merged.total = merged.total ?? prev.total
+            merged.used = merged.used ?? prev.used
+            merged.usedPercent = merged.usedPercent ?? prev.usedPercent
+            merged.remainingPercent = merged.remainingPercent ?? prev.remainingPercent
+            merged.plan = merged.plan ?? prev.plan
+            states[provider]?.result = merged
+            Diagnostics.record("collector", "\(provider.displayName) 降级结果合并：保留旧的总额度/进度")
+        } else {
+            states[provider]?.result = result
+        }
         states[provider]?.error = nil
         if case .windowReset = provider.descriptor.claimReminder {
             scheduleWindowResetReminder(for: provider)
