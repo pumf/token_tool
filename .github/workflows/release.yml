@@ -1,0 +1,43 @@
+# Tag 推送触发：三架构构建 → 打包 → 创建 GitHub Release
+# 用途：本地网络无法访问 api.github.com 时的发布通道（构建与发布全部在 CI 完成）
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & package
+        run: |
+          bash build.sh
+          bash package.sh
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            cat .github/RELEASE_NOTES.md
+            echo
+            echo "## 校验"
+            echo
+            echo "| 文件 | SHA-256 |"
+            echo "| --- | --- |"
+            awk '{ printf "| %s | `%s` |\n", $2, $1 }' build/dist/SHA256SUMS
+          } > build/dist/notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file build/dist/notes.md \
+            build/dist/*.dmg build/dist/*.zip build/dist/SHA256SUMS \
+            || gh release upload "$GITHUB_REF_NAME" \
+                 build/dist/*.dmg build/dist/*.zip build/dist/SHA256SUMS --clobber
