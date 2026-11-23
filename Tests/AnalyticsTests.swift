@@ -285,6 +285,33 @@ struct AnalyticsSuite {
             expectClose(insight?.yesterdayConsumed, 1200)
             expectClose(insight?.todayConsumed, 120)
         }
+        test("连续假涨段不计入，随后的回吐也不算消耗") {
+            // credits 采集层曾把页面文本里的大数字误当余额（7 位假值连着几拍），
+            // 随后落回正常水位——假涨段整段丢弃，假值→真值的回吐不该算消耗。
+            var samples = (0...36).map { hour -> UsageSample in
+                let consumed = Double(hour) <= 24
+                    ? Double(hour) * 50
+                    : 1200 + (Double(hour) - 24) * 10
+                return creditSample(at: offset(-36 + Double(hour)), remaining: 2600 - consumed)
+            }
+            samples.append(creditSample(at: offset(-19.6), remaining: 5_000_000))
+            samples.append(creditSample(at: offset(-19.2), remaining: 5_000_000))
+            samples.append(creditSample(at: offset(-18.8), remaining: 5_000_000))
+            let insight = UsageAnalytics.insight(
+                provider: .qoder, input: creditInput(remaining: 1280), samples: samples, now: noon
+            )
+            expectClose(insight?.yesterdayConsumed, 1200)
+            expectClose(insight?.todayConsumed, 120)
+        }
+        test("持续维持高位的大额领取不被假涨规则误伤") {
+            // 48 拍（约 4 小时）内落不回基线附近就算真实充值，照常收下。
+            let values: [Double] = [1000, 1100, 1200] + Array(repeating: 8000, count: 50)
+            expectEqual(UsageAnalytics.glitchFreeIndices(values).count, values.count)
+        }
+        test("假涨段在落回基线附近时被剔除") {
+            let values: [Double] = [1000, 1100, 5_000_000, 5_000_000, 1150]
+            expectEqual(UsageAnalytics.glitchFreeIndices(values).count, 3)
+        }
         test("昨天只有白天有样本也给出昨日参照（首尾两点即采信）") {
             // 昨天 15:00 才开机到 24:00（下午 9 个点），旧的时间覆盖率门槛会误伤成「无参照」；
             // 新规则只要昨天有首尾两个采样点就采信，给出下午这段的消耗。

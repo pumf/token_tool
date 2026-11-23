@@ -4,7 +4,7 @@ macOS 顶部菜单栏的 AI 额度监控工具，实时查看 **Qoder**、**Work
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.9**（build 33） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.10**（build 34） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -62,6 +62,7 @@ macOS 顶部菜单栏的 AI 额度监控工具，实时查看 **Qoder**、**Work
 - **CSV 导出**：面板底部「导出」可按 7 / 14 / 30 / 90 天选择范围导出用量历史，便于离线分析。
 - **采集与本地数据兜底**：五家分开采集、各给各的超时预算（Codex 70 秒 / WorkBuddy 25 秒 / Qoder 80 秒 / Claude Code 75 秒 / Trae 20 秒），按刷新节奏分组并行、子进程退出用事件等待而非轮询，一家卡住不再拖累另外四家；超时、缺少 python3、输出结构变化这类问题按指数退避重试，原因直接写在卡片上。历史文件损坏时自动回退上一份备份，主文件改名留证后重新积累，不再出现「一觉醒来历史清零」；采集器输出按平台隔离解码，某一家字段变化不会把其他几家一起打回「无法解析」。
 - **本地诊断日志**：采集失败、历史 / 缓存读写异常、告警触发与更新下载结果会写入已脱敏的本地日志（256 KB 自动轮换），面板底部「诊断」可一键在 Finder 中定位，排查问题时不必再靠猜。
+- **Trae 版本兼容**：Trae 采集按「CN 版优先、国际版回退」找数据目录与安装路径（`Trae CN` → `Trae`、`/Applications/Trae CN.app` → `/Applications/Trae.app`、`~/.trae-cn` → `~/.trae`）；实时采集走顶栏积分控件与官方接口，不会把 AI 聊天面板里的文字误当成余额。国际版的官方额度接口域名不同，接口直连仅对 CN 版生效，国际版依赖控件与日志兜底。
 - **开源信息**：面板底部展示当前版本、GitHub 源码与 MIT 许可证入口。
 - **自动刷新**：Codex 与 WorkBuddy 每 60 秒，Qoder 每 90 秒（CLI 采集单次约 5 秒），Claude Code 与 Trae 每 120 秒；展开面板时若 Qoder 数据已超过 90 秒会立刻补采一次，先显示缓存值、采集回来就地更新。另支持手动刷新与系统唤醒后自动刷新。
 - **本地缓存**：启动时先展示上次数据，再异步更新；历史快照保留 90 天。
@@ -169,7 +170,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.9` | 当前安装版本 |
+| `v1.8.10` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -209,11 +210,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.9-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.9-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.9.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.9/TokenTool-1.8.9.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.10-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.10-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.10.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.10/TokenTool-1.8.10.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.9/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.10/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -381,6 +382,16 @@ defaults delete com.local.tokentool 2>/dev/null
 ```
 
 ## 版本记录
+
+### 1.8.10
+
+> 2026-11-23 发布。
+
+- **修复 Trae 余额偶发变成天量假值**：实时采集的整页 DOM 兜底探针会把 AI 聊天面板里的文字误当成余额（实测抓走对话中提到的 7,329,783，形成「面板显示假值 → 用户讨论 → 再次误抓」的自污染回环）。现在优先锁定顶栏积分入口控件（`credits-entry-module__total` / trigger title「积分 N」），整页扫描降为控件缺失时的最后兜底且只认裸数字；数值硬闸从 1,000 万收紧到 100 万；接口键名匹配拒绝 `remaining_tokens` 这类 token 字段。
+- **Trae 补齐总额度与已用展示**：新增 JWT 自动捕获——监听工作台自带的认证请求（git 轮询等）抓 `Cloud-IDE-JWT` 头，原子落盘（0600）后官方用量接口（fetch 主路径）长期可用，总额度、已用（积分包周期累计）与使用比例完整返回；此前 token 缺失导致只有余额一个数。
+- **历史脏数据自动豁免**：新增假涨段剔除（连续涨到基线 5 倍以上、48 拍内落回 1.5 倍以内即整段丢弃，与既有假跌剔除对称），昨日/本周/本月三处差分统一接入——已被污染的历史无需手动清洗，下一个真实样本落地即恢复正确。
+- **Intel / 国际版 Trae 兼容**：数据目录、安装路径与 JWT 路径按「CN 版优先、国际版回退」逐级查找（`Trae CN` → `Trae`）；国际版官方接口域名不同，接口直连仅 CN 版生效，国际版依赖控件与日志兜底。
+- **测试**：Swift 275 项、Python 143 项全部通过（新增 20 项防污染与 JWT 用例）。
 
 ### 1.8.9
 
@@ -666,7 +677,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.9（build 33） |
+| 当前版本 | 1.8.10（build 34） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

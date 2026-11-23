@@ -288,10 +288,10 @@ def test_trae_scan_file():
 
 
 def test_collect_trae():
-    original = collector.TRAE_LOG_ROOT
+    original = collector.TRAE_LOG_ROOTS
     try:
         with tempfile.TemporaryDirectory() as root:
-            collector.TRAE_LOG_ROOT = Path(root)
+            collector.TRAE_LOG_ROOTS = [Path(root)]
             expect_equal(collector.collect_trae()["ok"], False, "没有日志目录时失败")
             check("Trae" in collector.collect_trae()["error"], "失败原因是中文提示")
 
@@ -324,11 +324,11 @@ def test_collect_trae():
             expect_equal(collector.collect_trae()["remaining"], 1180.0, "脏数据退回上一份有效记录")
 
         with tempfile.TemporaryDirectory() as root:
-            collector.TRAE_LOG_ROOT = Path(root)
+            collector.TRAE_LOG_ROOTS = [Path(root)]
             write_trae_log(root, "s", "window1", trae_line(-1))
             expect_equal(collector.collect_trae()["ok"], False, "只有负数余额时不采信")
     finally:
-        collector.TRAE_LOG_ROOT = original
+        collector.TRAE_LOG_ROOTS = original
 
 
 def trae_stamp(hours_ago):
@@ -337,10 +337,10 @@ def trae_stamp(hours_ago):
 
 
 def test_collect_trae_stale():
-    original = collector.TRAE_LOG_ROOT
+    original = collector.TRAE_LOG_ROOTS
     try:
         with tempfile.TemporaryDirectory() as root:
-            collector.TRAE_LOG_ROOT = Path(root)
+            collector.TRAE_LOG_ROOTS = [Path(root)]
             # 客户端 7 小时没再写积分行：余额按「可能过期」上报，采集时刻单独给一份。
             write_trae_log(root, "s", "window1", trae_line(1200, stamp=trae_stamp(7)), mtime=1000)
             result = collector.collect_trae()
@@ -358,7 +358,7 @@ def test_collect_trae_stale():
             expect_equal(result["stale"], False, "刚动过的余额不标过期")
             expect_equal(result["remaining"], 1180.0, "余额取最新日志")
     finally:
-        collector.TRAE_LOG_ROOT = original
+        collector.TRAE_LOG_ROOTS = original
 
 
 def test_trae_cdp_parse():
@@ -388,6 +388,54 @@ def test_trae_cdp_parse():
     expect_equal(collector.trae_remaining_from_probe(probe), 4600.0, "全局对象优先于 DOM 文本")
     expect_equal(collector.trae_remaining_from_probe({"dom": ["2,000 / 3,000"]}), 2000.0, "全局为空时退回 DOM")
     expect_equal(collector.trae_remaining_from_probe(None), None, "探测结果缺失不抛错")
+
+    # 顶栏积分控件是最可信的 DOM 来源，优先于整页文本；整页兜底仍受 1M 上限闸约束
+    expect_equal(
+        collector.trae_remaining_from_probe({"widget": ["5,019"], "dom": ["7,329,783"]}),
+        5019.0,
+        "积分控件优先于整页文本",
+    )
+    expect_equal(
+        collector.trae_remaining_from_probe({"dom": ["900,000", "5,019"]}),
+        900000.0,
+        "无控件时整页兜底仍按最大数",
+    )
+
+    # 自污染回环防线：Trae 内置 AI 聊天面板的文本也在页面里，「余额/剩余」
+    # 泛词行 + 行内取最大数会把对话里提到的数字当成余额（实测抓走过 7,329,783）。
+    expect_equal(collector.trae_remaining_from_dom(["余额 7,329,783"]), None, "「余额」泛词行不采信")
+    expect_equal(collector.trae_remaining_from_dom(["剩余 5001 跳到 7,329,783"]), None, "「剩余」泛词行不采信")
+    expect_equal(collector.trae_remaining_from_dom(["积分 1,200"]), 1200.0, "「积分」行仍采信")
+    expect_equal(collector.trae_remaining_from_dom(["credits left: 4,671.37"]), 4671.37, "credits 行仍采信")
+    expect_equal(collector.trae_remaining_from_json({"remaining_tokens": 7329783}), None, "remaining_tokens 键拒绝")
+    expect_equal(collector.trae_remaining_from_json({"remaining_chars": 99999}), None, "remaining_chars 键拒绝")
+    expect_equal(collector.trae_remaining_from_json({"remainingCredits": 5066}), 5066.0, "remainingCredits 复合键放行")
+    expect_equal(collector.trae_remaining_from_json({"remaining": 5066}), 5066.0, "remaining 键放行")
+
+    summary = collector.trae_usage_from_summary(
+        {"usage_summary": {"total_amount": 1200, "consumed_amount": 134}}
+    )
+    expect_equal(summary["remaining"], 1066.0, "usage_summary 结构化解析")
+    expect_equal(summary["total"], 1200.0, "结构化解析带回 total")
+    expect_equal(summary["consumed"], 134.0, "结构化解析带回 consumed")
+    expect_equal(collector.trae_usage_from_summary({"usage_summary": {}}), None, "空 summary 返回空")
+    expect_equal(collector.trae_usage_from_summary({"other": 1}), None, "无 summary 返回空")
+
+
+def test_trae_jwt_roundtrip():
+    """JWT 抓取落盘：0600 权限、原子写、内容不变不重写。"""
+    original = collector.TRAE_JWT_TOKEN_PATHS
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            collector.TRAE_JWT_TOKEN_PATHS = [Path(tmp) / "trae-jwt-token"]
+            collector.trae_save_jwt("eyJaa.aaa.aaa" + "x" * 40)
+            path = collector.TRAE_JWT_TOKEN_PATHS[0]
+            expect_equal(collector.trae_read_jwt(), "eyJaa.aaa.aaa" + "x" * 40, "JWT 落盘后能读回")
+            expect_equal(oct(path.stat().st_mode & 0o777), oct(0o600), "JWT 文件权限 0600")
+            collector.trae_save_jwt("eyJaa.aaa.aaa" + "x" * 40)
+            expect_equal(path.read_text().strip(), "eyJaa.aaa.aaa" + "x" * 40, "内容不变不重写")
+    finally:
+        collector.TRAE_JWT_TOKEN_PATHS = original
 
 
 def test_provider_lock_and_transient_fail():

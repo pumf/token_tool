@@ -210,6 +210,53 @@ enum UsageAnalytics {
         }
     }
 
+    /// 剔除采样垃圾值，返回应保留的下标。差分前必须先剔除，否则假跌计入消耗、
+    /// 假涨后的回吐也计入消耗，昨日/本周用量会被撑爆。
+    /// - 假跌：连续若干拍跌破基线一半、随后又弹回九成以上 → 整段丢弃（页面重载
+    ///   间隙兜底探针抓错的旧形态）；
+    /// - 假涨：连续若干拍涨到基线 5 倍以上、随后又落回基线 1.5 倍以内 → 整段丢弃
+    ///   （credits 采集层曾把页面文本里其他大数字误当余额，产生 7 位假值）。真实
+    ///   的大额领取不受影响：48 拍（约 4 小时）内落不回基线附近就算真实，照常收下。
+    static func glitchFreeIndices(_ values: [Double]) -> IndexSet {
+        guard values.count >= 3 else { return IndexSet(values.indices) }
+        var keep = IndexSet()
+        var index = 0
+        while index < values.count {
+            let baseline = keep.last.map { values[$0] } ?? values[index]
+            let value = values[index]
+            if value < baseline * 0.5 {
+                var end = index
+                while end < values.count, values[end] < baseline * 0.5 { end += 1 }
+                if end < values.count, values[end] > baseline * 0.9 {
+                    index = end
+                    continue
+                }
+            } else if value > baseline * 5 {
+                var end = index
+                while end < values.count,
+                      values[end] > baseline * 1.5,
+                      end - index < 48 {
+                    end += 1
+                }
+                if end < values.count,
+                   values[end] <= baseline * 1.5,
+                   end - index < 48 {
+                    index = end
+                    continue
+                }
+            }
+            keep.insert(index)
+            index += 1
+        }
+        return keep
+    }
+
+    private static func dropGlitches<T>(_ points: [T], value: (T) -> Double) -> [T] {
+        let keep = glitchFreeIndices(points.map(value))
+        guard keep.count != points.count else { return points }
+        return points.enumerated().filter { keep.contains($0.offset) }.map(\.element)
+    }
+
     static func insight(
         provider: UsageProvider,
         input: UsageInput,
@@ -244,28 +291,7 @@ enum UsageAnalytics {
             }
         }
         points.sort { $0.at < $1.at }
-
-        // 剔除假跌段：连续若干拍跌掉一半以上、随后又弹回九成以上的样本，是采集器
-        // 抓到的垃圾值（页面重载间隙兜底探针抓错，可能连着几拍）。差分前整段丢掉，
-        // 否则假跌计入消耗、弹回计入 reclaimed，昨日用量会被撑爆。
-        if points.count >= 3 {
-            var cleaned: [(at: Double, value: Double, total: Double?, reset: Int?)] = []
-            cleaned.reserveCapacity(points.count)
-            var index = 0
-            while index < points.count {
-                if let baseline = cleaned.last?.value, points[index].value < baseline * 0.5 {
-                    var end = index
-                    while end < points.count, points[end].value < baseline * 0.5 { end += 1 }
-                    if end < points.count, points[end].value > baseline * 0.9 {
-                        index = end
-                        continue
-                    }
-                }
-                cleaned.append(points[index])
-                index += 1
-            }
-            points = cleaned
-        }
+        points = dropGlitches(points) { $0.value }
 
         // credits 类 provider（Trae 等）如果直接上报了今日消耗绝对值，
         // 直接用它当今日消耗——不依赖 history 差分，避免样本不足时不准。
@@ -388,6 +414,7 @@ enum UsageAnalytics {
             }
         }
         points.sort { $0.at < $1.at }
+        points = dropGlitches(points) { $0.value }
         guard points.count >= 2 else { return nil }
 
         var thisWeek = 0.0
@@ -460,6 +487,7 @@ enum UsageAnalytics {
             }
         }
         points.sort { $0.at < $1.at }
+        points = dropGlitches(points) { $0.value }
         guard points.count >= 2 else { return nil }
         var consumed = 0.0
         for index in 1..<points.count {

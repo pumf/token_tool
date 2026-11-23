@@ -954,7 +954,6 @@ def collect_claude() -> dict:
 # 官方 traecli 也没有 usage 子命令。唯一可读的来源是客户端自己在 renderer 日志里
 # 写的一行 `credits mutation refresh completed {"generation":1,"remaining":1200}`。
 # 因此这里只匹配这一行、只取数字；同一文件里的其他内容一概不读，也不带进错误信息。
-TRAE_LOG_ROOT = APP_SUPPORT.parent / "Trae CN" / "logs"
 TRAE_CREDIT_RE = re.compile(
     r"(?P<stamp>\d{4}-\d{2}-\d{2}T[\d:.]+\+[\d:]{2,5})\s+\[[a-z]+\]"
     r"[^\n]*?credits mutation refresh completed\s+"
@@ -962,6 +961,8 @@ TRAE_CREDIT_RE = re.compile(
 )
 TRAE_LOG_TAIL_BYTES = 2 * 1024 * 1024
 TRAE_LOG_FILES_LIMIT = 6
+# CN 版在前；国际版数据目录无 CN 后缀。测试会整体替换这个列表。
+TRAE_LOG_ROOTS = [APP_SUPPORT.parent / "Trae CN" / "logs", APP_SUPPORT.parent / "Trae" / "logs"]
 # 积分行只在变动时写一条；3.4.17 起客户端可能在消耗后也不再写。
 # 超过这个时长没动过的余额按「可能过期」上报，页面负责提示。
 TRAE_STALE_SECONDS = 6 * 3600
@@ -977,11 +978,13 @@ def trae_stamp_epoch(stamp):
 
 def trae_log_files(root=None):
     """候选日志按修改时间从新到旧；只认 window*/renderer.log，不翻整个目录树。"""
-    base = Path(root) if root else TRAE_LOG_ROOT
-    try:
-        files = [path for path in base.glob("*/window*/renderer.log") if path.is_file()]
-    except OSError:
-        return []
+    roots = [Path(root)] if root else TRAE_LOG_ROOTS
+    files = []
+    for base in roots:
+        try:
+            files.extend(path for path in base.glob("*/window*/renderer.log") if path.is_file())
+        except OSError:
+            continue
     return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
@@ -1033,11 +1036,48 @@ def trae_scan_file(path):
 # 需要 Trae 带 --remote-debugging-port=9335 启动（"启用实时采集"按钮会自动处理）。
 TRAE_CDP_PORT = 9335
 TRAE_CDP_MAX_TARGETS = 4
-TRAE_CDP_NETWORK_WAIT = 6.0
+TRAE_CDP_NETWORK_WAIT = 12.0
 # 余额只认「正的、量级合理的数」，过滤掉页面上随手可拾的其他数字。
-TRAE_CDP_NUMBER_MAX = 10_000_000
+# 积分天花板取 1M：Trae 个人版全量积分到不了这个量级，而页面文本里
+# token 数、字节数、累计请求数动辄百万——这个门槛是防误抓的硬闸。
+TRAE_CDP_NUMBER_MAX = 1_000_000
 TRAE_JWT_TOKEN_PATH = HOME / ".trae-cn" / "trae-jwt-token"
+# 国际版 Trae（英文版）的登录态与数据目录都不同；JWT 读取按存在性逐级回退。
+TRAE_JWT_TOKEN_PATHS = [TRAE_JWT_TOKEN_PATH, HOME / ".trae" / "trae-jwt-token"]
 TRAE_API_URL = "https://api.trae.cn/trae/api/v2/pay/ide_user_ent_usage"
+
+
+def trae_read_jwt():
+    for path in TRAE_JWT_TOKEN_PATHS:
+        try:
+            if path.is_file():
+                token = path.read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+        except OSError:
+            continue
+    return None
+
+
+def trae_save_jwt(token):
+    """把从网络层抓到的 JWT 原子落盘（0600），下次采集 fetch 主路径即可用。
+    token 一般长期有效，写一次就够了；内容没变不重写。"""
+    target = TRAE_JWT_TOKEN_PATHS[0]
+    try:
+        if target.is_file() and target.read_text(encoding="utf-8").strip() == token:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, token.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, target)
+    except OSError:
+        pass
+
+
 # 测试里设 TOKENTOOL_DISABLE_CDP=1 跳过 CDP 层，避免误连真机
 TRAE_CDP_ENABLED = os.environ.get("TOKENTOOL_DISABLE_CDP") != "1"
 
@@ -1071,12 +1111,26 @@ TRAE_FETCH_API_JS = """(async () => {
 })()"""
 
 TRAE_PROBE_JS = """(() => {
-  const out = { global: {}, dom: [] };
+  const out = { global: {}, widget: [], dom: [] };
   const cut = (value) => { try { return JSON.stringify(value).slice(0, 20000); } catch (e) { return null; } };
   try {
     if (typeof ICubeRemote !== 'undefined' && ICubeRemote) out.global.remote = cut(ICubeRemote.globals);
     if (typeof icubeWorkspace !== 'undefined' && icubeWorkspace) {
       out.global.workspace = cut({ id: icubeWorkspace.id, activeAIPanel: icubeWorkspace.activeAIPanel });
+    }
+  } catch (e) {}
+  // 积分入口控件（顶栏 credits-entry）：这是唯一可信的 DOM 来源。
+  // AI 聊天面板的 markdown 文本也在页面里，任意对话都可能包含「积分/余额 +
+  // 数字」，整页扫描会把对话内容当成余额（实测把 7,329,783 这种讨论数字
+  // 抓走过，形成自污染回环），所以整页文本只作控件缺失时的最后兜底。
+  try {
+    const total = document.querySelector('[class*="credits-entry-module__total"]');
+    if (total && total.textContent) out.widget.push(total.textContent.trim());
+    const trigger = document.querySelector('[class*="credits-entry-module__trigger"]');
+    if (trigger) {
+      if (trigger.title) out.widget.push(trigger.title.trim());
+      const label = trigger.getAttribute('aria-label');
+      if (label) out.widget.push(label.trim());
     }
   } catch (e) {}
   try {
@@ -1086,7 +1140,7 @@ TRAE_PROBE_JS = """(() => {
     while ((node = walker.nextNode()) && out.dom.length < 60) {
       const text = (node.textContent || '').trim();
       if (!text || text.length > 120) continue;
-      if (/积分|余额|剩余|credits?/i.test(text) || /^[\\d,]+(?:\\.\\d+)?$/.test(text)) out.dom.push(text);
+      if (/^[\\d,]+(?:\\.\\d+)?$/.test(text)) out.dom.push(text);
     }
   } catch (e) {}
   return out;
@@ -1112,14 +1166,31 @@ def trae_cdp_number(value):
     return None
 
 
+def trae_key_is_remaining(key):
+    """键名是否表示积分余额。精确白名单 + 受控复合名：
+    remainingCredits 这类真实接口键（remaining 与 credit 组合）放行，
+    remaining_tokens / remaining_chars 这类 token 余量字段（量级百万起步）拒绝。"""
+    lowered = str(key).lower()
+    if lowered in ("remaining", "remain", "balance", "left_quota", "leftquota", "rest_credits"):
+        return True
+    return (
+        "remaining" in lowered
+        and "credit" in lowered
+        and "token" not in lowered
+        and "char" not in lowered
+    )
+
+
+TRAE_REMAINING_TEXT_RE = re.compile(r"\"([A-Za-z_]+)\"\s*:\s*\"?(-?\d+(?:,\d{3})*(?:\.\d+)?)\"?")
+
+
 def trae_remaining_from_json(data):
-    """在任意结构里按键名找余额；键名取自客户端真实接口的 remaining/balance 字段。"""
-    keywords = ("remaining", "remain", "balance", "left_quota", "leftquota", "rest_credits")
+    """在任意结构里按键名找余额；键名判定见 trae_key_is_remaining。"""
+
     def walk(node):
         if isinstance(node, dict):
             for key, value in node.items():
-                lowered = str(key).lower()
-                if any(word in lowered for word in keywords):
+                if trae_key_is_remaining(key):
                     found = trae_cdp_number(value)
                     if found is not None:
                         return found
@@ -1132,24 +1203,54 @@ def trae_remaining_from_json(data):
                 if found is not None:
                     return found
         return None
+
     return walk(data)
 
 
+def trae_usage_from_summary(payload):
+    """ide_user_ent_usage 响应的结构化解析：usage_summary.total_amount - consumed_amount。
+
+    只信这一对官方字段；走不到这个结构再退回键名搜索。
+    """
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("usage_summary")
+    if not isinstance(summary, dict):
+        return None
+    total = trae_cdp_number(summary.get("total_amount"))
+    if total is None:
+        return None
+    consumed = trae_cdp_number(summary.get("consumed_amount"))
+    remaining = round(total - (consumed or 0.0), 2)
+    if remaining <= 0:
+        return None
+    return {
+        "remaining": remaining,
+        "consumed": consumed,
+        "total": total,
+        "ratio": trae_cdp_number(summary.get("consumption_ratio")),
+    }
+
+
 def trae_remaining_from_text(text):
-    """全局对象可能不是合法 JSON，退化为正则扫序列化文本。"""
+    """全局对象可能不是合法 JSON，退化为正则扫序列化文本；键名判定同 from_json。"""
     if not isinstance(text, str):
         return None
-    match = re.search(
-        r"\"(?:[A-Za-z_]*)(?:remaining|balance|leftQuota)(?:[A-Za-z_]*)\"\s*:\s*\"?(-?[\d,]+(?:\.\d+)?)\"?",
-        text,
-    )
-    if match:
-        return trae_cdp_number(match.group(1))
+    for match in TRAE_REMAINING_TEXT_RE.finditer(text):
+        if trae_key_is_remaining(match.group(1)):
+            found = trae_cdp_number(match.group(2))
+            if found is not None:
+                return found
     return None
 
 
 def trae_remaining_from_dom(hits):
-    """面板文本取数：「X / Y」优先取 X；带积分字样的行取行内最大数；裸数字行兜底取最大。"""
+    """面板文本取数：「X / Y」优先取 X；带积分字样的行取行内最大数；裸数字行兜底取最大。
+
+    关键词只认「积分/credits」，不认「余额/剩余」——这两个词在 AI 聊天面板里
+    高频出现（聊天内容也是页面文本节点），取行内最大数会把对话里提到的任何
+    大数字当成余额，形成「面板显示假值 → 用户讨论 → 再次误抓」的自污染回环。
+    """
     if not isinstance(hits, list):
         return None
     labelled = []
@@ -1162,7 +1263,7 @@ def trae_remaining_from_dom(hits):
             found = trae_cdp_number(pair.group(1))
             if found is not None:
                 return found
-        if re.search(r"积分|余额|剩余|credits?", text, re.IGNORECASE):
+        if re.search(r"积分|credits?", text, re.IGNORECASE):
             for match in re.finditer(r"([\d,]+(?:\.\d+)?)", text):
                 found = trae_cdp_number(match.group(1))
                 if found is not None:
@@ -1192,6 +1293,11 @@ def trae_remaining_from_probe(probe):
             found = trae_remaining_from_text(value)
         if found is not None:
             return found
+    # 积分入口控件的文本最可信；整页文本只作控件缺失时的兜底（有被
+    # AI 聊天内容污染的风险，收集层已限制为裸数字 + 上限闸 + Swift 假涨剔除）。
+    widget = trae_remaining_from_dom(probe.get("widget"))
+    if widget is not None:
+        return widget
     return trae_remaining_from_dom(probe.get("dom"))
 
 
@@ -1243,7 +1349,9 @@ class TraeCDP:
             return None
 
     def listen_pay_responses(self, seconds):
-        """短暂监听 pay/* 响应体。轮询周期是 1-2 分钟，这一层多数时候赶不上，仅作兜底。"""
+        """短暂监听 pay/* 响应体与请求头。轮询周期是 1-2 分钟，这一层多数时候
+        赶不上，仅作兜底；但 Authorization 头只要碰上一回，就把 JWT 落盘，
+        此后 fetch 主路径（不依赖轮询时机）长期可用。"""
         from websocket import WebSocketTimeoutException
 
         if self.call("Network.enable", {}, timeout=3.0) is None:
@@ -1266,7 +1374,18 @@ class TraeCDP:
                 continue
             method = message.get("method") or ""
             params = message.get("params") or {}
-            if method == "Network.responseReceived":
+            if method == "Network.requestWillBeSentExtraInfo":
+                headers = params.get("headers") or {}
+                for name, value in headers.items():
+                    if str(name).lower() != "authorization":
+                        continue
+                    auth = str(value)
+                    if auth.startswith("Cloud-IDE-JWT "):
+                        token = auth[len("Cloud-IDE-JWT "):].strip()
+                        if token.startswith("eyJ") and len(token) > 40:
+                            trae_save_jwt(token)
+                    break
+            elif method == "Network.responseReceived":
                 url = ((params.get("response") or {}).get("url")) or ""
                 if re.search(r"pay/|usage|credit", url):
                     pending.add(params.get("requestId"))
@@ -1277,7 +1396,10 @@ class TraeCDP:
                     payload = (body or {}).get("result", {}).get("body") or ""
                     if (body or {}).get("result", {}).get("base64Encoded"):
                         payload = base64.b64decode(payload).decode("utf-8", "replace")
-                    found = trae_remaining_from_json(json.loads(payload))
+                    data = json.loads(payload)
+                    found = trae_usage_from_summary(data)
+                    if found is None:
+                        found = trae_remaining_from_json(data)
                 except (ValueError, TypeError):
                     found = trae_remaining_from_text(payload if isinstance(payload, str) else None)
                 if found is not None:
@@ -1348,13 +1470,9 @@ def trae_cdp_fetch_api(port=TRAE_CDP_PORT):
     这里让 collector 通过 CDP 在渲染进程里执行 fetch，
     完全复用 Trae 自己的网络栈和鉴权上下文。
     """
-    if not TRAE_JWT_TOKEN_PATH.is_file():
+    if not TRAE_JWT_TOKEN_PATHS:
         return None
-    try:
-        token = TRAE_JWT_TOKEN_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        # is_file 与 read 之间存在删除/权限竞态；这里失败应降级到日志采集而非整体 fail。
-        return None
+    token = trae_read_jwt()
     if not token:
         return None
     targets = trae_cdp_targets(port)
@@ -1389,20 +1507,26 @@ def trae_cdp_fetch_api(port=TRAE_CDP_PORT):
 
 
 def trae_collect_cdp(port=TRAE_CDP_PORT):
-    """实时取余额；端口没开、页面拿不到数都返回 None，调用方退回日志。
+    """实时取余额与总额；端口没开、页面拿不到数都返回 None，调用方退回日志。
 
-    优先走 fetch API（完整数据、实时、可靠），
-    拿不到再降级到旧的三层兜底（DOM 探测 + Network 监听）。
+    取数优先级：
+    1. fetch API——完整（余额/已用/总额）、实时、可靠，需要已抓到 JWT；
+    2. DOM 探测（积分控件）——只有余额，胜在快；
+    3. JWT 未抓到时短监听一段——工作台会周期性发出带 Cloud-IDE-JWT 头的
+       请求（git 轮询等），抓到即落盘，下一轮 fetch 主路径就能给出总额与已用；
+    4. 被动监听轮询——概率兜底。
     """
     # 主路径：fetch API
     result = trae_cdp_fetch_api(port)
     if result is not None:
         return result
 
-    # 降级：旧的三层兜底（兼容没有 fetch API 或 token 不可用的极端情况）
     targets = trae_cdp_targets(port)
     if not targets:
         return None
+
+    # DOM 探测：只有余额
+    probe_result = None
     for target in targets:
         try:
             cdp = TraeCDP(target)
@@ -1411,11 +1535,34 @@ def trae_collect_cdp(port=TRAE_CDP_PORT):
         try:
             found = trae_remaining_from_probe(cdp.evaluate(TRAE_PROBE_JS))
             if found is not None:
-                return {"remaining": found}
+                probe_result = {"remaining": found}
+                break
         except Exception:
             continue
         finally:
             cdp.close()
+
+    # JWT 未抓到：短监听抓 Authorization 头（工作台自带轮询请求，无需触发）
+    if trae_read_jwt() is None:
+        for target in targets:
+            if "workbench" not in (target.get("url") or "") and (target.get("title") or "") != "Agent":
+                continue
+            try:
+                cdp = TraeCDP(target, timeout=10.0)
+            except Exception:
+                continue
+            try:
+                found = cdp.listen_pay_responses(TRAE_CDP_NETWORK_WAIT)
+            except Exception:
+                found = None
+            finally:
+                cdp.close()
+            if isinstance(found, dict) and found.get("total") is not None:
+                return found
+            break
+
+    if probe_result is not None:
+        return probe_result
     for target in targets:
         if "workbench" not in (target.get("url") or "") and (target.get("title") or "") != "Agent":
             continue
@@ -1458,8 +1605,12 @@ def trae_cdp_restart() -> dict:
 
     只处理当前用户的实例（pgrep 限定 uid）；就绪判定用 trae_cdp_owner_ok，
     确认 9335 的监听者确实是 Trae 而不是抢注端口的其他进程。
+    国际版 Trae 装在 /Applications/Trae.app，两个候选按存在性选择。
     """
-    app_path = "/Applications/Trae CN.app"
+    candidates = [path for path in ("/Applications/Trae CN.app", "/Applications/Trae.app") if os.path.isdir(path)]
+    if not candidates:
+        return fail("未找到 Trae（Trae CN.app / Trae.app 都不在 /Applications）")
+    app_path = candidates[0]
     binary_hint = app_path + "/Contents/MacOS/Electron"
     running = lambda: bool(_trae_main_pids(binary_hint))
     if running():
