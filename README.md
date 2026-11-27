@@ -4,7 +4,7 @@ macOS 顶部菜单栏的 AI 额度监控工具，实时查看 **Qoder**、**Work
 
 无 Dock 图标、无后台常驻窗口，点击菜单栏即可展开详情，也可以按全局快捷键 `⌥⇧T` 随时开合；五家平台可独立控制是否显示在菜单栏、菜单栏有三种显示样式可切换，并可直接打开对应客户端或官网，还支持每日领取与额度重置提醒。需要留意的事情会直接在菜单栏和面板顶部显示，不依赖系统通知。项目以 **MIT** 协议开源，并内置版本检查与「校验通过后一键安装并重启」。
 
-当前版本：**1.8.11**（build 35） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
+当前版本：**1.8.12**（build 36） · 许可证：[MIT](LICENSE) · 源码：[GitHub](https://github.com/pumf/token_tool) · 宣传站：[tokentool-19u6gg8f8fg.qoder.zone](https://tokentool-19u6gg8f8fg.qoder.zone)
 
 ## 界面预览
 
@@ -170,7 +170,7 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | 元素 | 说明 |
 | --- | --- |
-| `v1.8.11` | 当前安装版本 |
+| `v1.8.12` | 当前安装版本 |
 | `GitHub` | 打开项目源码仓库 |
 | `MIT` | 打开 MIT 许可证 |
 | `导出` | 按 7 / 14 / 30 / 90 天范围把用量历史导出为 CSV 文件 |
@@ -210,11 +210,11 @@ Codex 的预测速度按窗口长度选择口径。周、月度这类天级以�
 
 | Mac 类型 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.11-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11-arm64.zip) |
-| Intel（x86_64） | [`TokenTool-1.8.11-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11-x86_64.zip) |
-| 不确定 / 通用版本 | [`TokenTool-1.8.11.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.11/TokenTool-1.8.11.zip) |
+| Apple Silicon（M1 / M2 / M3 / M4…） | [`TokenTool-1.8.12-arm64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12-arm64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12-arm64.zip) |
+| Intel（x86_64） | [`TokenTool-1.8.12-x86_64.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12-x86_64.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12-x86_64.zip) |
+| 不确定 / 通用版本 | [`TokenTool-1.8.12.dmg`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12.dmg) / [`.zip`](https://github.com/pumf/token_tool/releases/download/v1.8.12/TokenTool-1.8.12.zip) |
 
-各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.11/SHA256SUMS)。
+各安装包的 SHA-256 见同一 Release 下的 [`SHA256SUMS`](https://github.com/pumf/token_tool/releases/download/v1.8.12/SHA256SUMS)。
 
 不确定芯片类型时，点击左上角苹果菜单 →「关于本机」，查看「芯片」一栏：Apple M 系列选 `arm64`，Intel 选 `x86_64`。
 
@@ -383,15 +383,20 @@ defaults delete com.local.tokentool 2>/dev/null
 
 ## 版本记录
 
-### 1.8.11
+### 1.8.12
 
 > 2026-11-27 发布。
 
-- **修复面板关闭后后台持续 17% CPU（假死）**：WaveBackdrop 的 Canvas 即使 `TimelineView.paused` 暂停了 timeline 事件，仍常驻 SwiftUI 视图树参与 UpdateCycle 渲染——4 天不关面板相当于后台默默跑了 4 天 60fps 波形。现在面板关闭时用 `if` 把 WaveBackdrop 整个从视图树移除，CPU 从 17% 降到 0.4%。
-- **Trae API 域名动态选择**：国际版 Trae 官方接口域名不同（`api.trae.ai`），此前硬编码 `api.trae.cn` 导致国际版 Intel Mac 用户 fetch 主路径 404。现在按 `~/.trae-cn` / `~/.trae` 目录存在性自动选域名，JWT 落盘也双写两个目录。
-- **Trae 取消每日签到活动**：`claimReminder` 从 `.daily` 改为 `.windowReset`，首次启动 1.8.11 时自动关掉已有开关 + 清 pending 通知。
-- **采集降级时不冲掉好缓存**：TokenTool 重启后第一次采集若遇 CDP 瞬态不可用，会降级到 DOM 探针只返回 remaining——之前 `apply()` 直接覆盖缓存导致面板丢失总额度/进度条，现在新数据只有 remaining 时合并保留旧的 total/usedPercent。
+- **修复 Intel Mac 无法采集 Trae 额度**：两个根因叠加导致 Intel Mac 上 Trae 完全采不到。① 日志路径拼错了一层：`TRAE_LOG_ROOTS` 用 `APP_SUPPORT.parent` 拼出了 `~/Library/Trae CN/logs`，但新版 Trae 日志实际在 `~/Library/Application Support/Trae CN/logs/`；② Intel Mac 上 Trae 默认不带 `--remote-debugging-port=9335` 启动，CDP 主路径不可用，而新版 Trae 日志里也不再写余额数字，日志回退链直接断。现在日志路径修正为 Application Support 下的正确位置，并加了 4 路回退；CDP 不可用时自动重启 Trae 带调试端口（10 分钟节流，避免每次采集都重启）。
+- **WaveBackdrop CPU 泄漏修复**：面板关闭后 Canvas 仍常驻 SwiftUI 视图树参与 UpdateCycle 渲染，4 天不关面板 = 后台默默跑 4 天 60fps 波形，CPU 持续 17%。现在面板关闭时用 `if` 把 WaveBackdrop 整个从视图树移除，CPU 降到 0.4%。
+- **Trae API 域名动态选择**：国际版 Trae 官方接口域名不同（`api.trae.ai`），此前硬编码 `api.trae.cn`。现在按 `~/.trae-cn` / `~/.trae` 目录存在性自动选域名，JWT 落盘也双写两个目录。
+- **Trae 取消每日签到活动**：`claimReminder` 从 `.daily` 改为 `.windowReset`，首次启动 1.8.12 时自动关掉已有开关 + 清 pending 通知。
+- **采集降级时不冲掉好缓存**：TokenTool 重启后第一次采集若遇 CDP 瞬态不可用，会降级到 DOM 探针只返回 remaining——之前 `apply()` 直接覆盖缓存导致面板丢失总额度/进度条，现在合并保留旧的 total/usedPercent。
 - **测试**：Swift 273 项、Python 143 项全部通过。
+
+### 1.8.11
+
+> 2026-11-27 发布（内部版本，未对外）。
 
 ### 1.8.10
 
@@ -687,7 +692,7 @@ defaults delete com.local.tokentool 2>/dev/null
 | 源码仓库 | <https://github.com/pumf/token_tool> |
 | 问题反馈 | <https://github.com/pumf/token_tool/issues> |
 | 版本发布 | <https://github.com/pumf/token_tool/releases> |
-| 当前版本 | 1.8.11（build 35） |
+| 当前版本 | 1.8.12（build 36） |
 
 欢迎提交 Issue 与 Pull Request。应用内的「检查更新」会读取 GitHub Releases 的最新版本，不会上传任何本地数据。
 

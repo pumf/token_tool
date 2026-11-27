@@ -961,8 +961,14 @@ TRAE_CREDIT_RE = re.compile(
 )
 TRAE_LOG_TAIL_BYTES = 2 * 1024 * 1024
 TRAE_LOG_FILES_LIMIT = 6
-# CN 版在前；国际版数据目录无 CN 后缀。测试会整体替换这个列表。
-TRAE_LOG_ROOTS = [APP_SUPPORT.parent / "Trae CN" / "logs", APP_SUPPORT.parent / "Trae" / "logs"]
+# CN 版在前；国际版数据目录无 CN 后缀。新版 Trae 日志在 Application Support 下的 logs/ 子目录。
+# 旧版本（3.4.x 之前）可能在 ~/Library/Trae CN/logs/，作为最后兜底。
+TRAE_LOG_ROOTS = [
+    APP_SUPPORT / "Trae CN" / "logs",
+    APP_SUPPORT / "Trae" / "logs",
+    APP_SUPPORT.parent / "Trae CN" / "logs",
+    APP_SUPPORT.parent / "Trae" / "logs",
+]
 # 积分行只在变动时写一条；3.4.17 起客户端可能在消耗后也不再写。
 # 超过这个时长没动过的余额按「可能过期」上报，页面负责提示。
 TRAE_STALE_SECONDS = 6 * 3600
@@ -1674,6 +1680,10 @@ def trae_cdp_restart() -> dict:
     return fail("Trae 已重启，但调试端口未就绪；请确认 Trae 正常启动后重试")
 
 
+# 自动重启节流：避免每次采集都尝试重启 Trae，至少间隔 10 分钟。
+_trae_last_restart_attempt = 0
+
+
 def collect_trae() -> dict:
     now = int(time.time())
     # 实时优先：调试端口在线就能通过 fetch API 拿到完整 usage 数据。
@@ -1715,6 +1725,47 @@ def collect_trae() -> dict:
                     "collectedAt": now,
                     "stale": False,
                 }
+        # CDP 不可用（Intel Mac 上 Trae 默认不带调试端口启动）：
+        # 自动重启带端口，但加 10 分钟节流避免每次采集都重启。
+        if now - _trae_last_restart_attempt > 600:
+            restart = trae_cdp_restart()
+            _trae_last_restart_attempt = now
+            if restart.get("ok"):
+                # 重启成功后等端口就绪再采一次
+                time.sleep(3)
+                live2 = trae_collect_cdp()
+                if live2 is not None:
+                    if isinstance(live2, dict):
+                        remaining = live2.get("remaining")
+                        consumed = live2.get("consumed")
+                        total = live2.get("total")
+                        if remaining is not None:
+                            return {
+                                "ok": True,
+                                "plan": "Free",
+                                "remaining": round(float(remaining), 2),
+                                "used": round(float(consumed), 2) if consumed is not None else None,
+                                "usedScope": "cumulative",
+                                "total": round(float(total), 2) if total is not None else None,
+                                "usedPercent": round(float(live2.get("ratio", 0)) * 100, 2) if live2.get("ratio") is not None else None,
+                                "unit": "credits",
+                                "source": "trae-api",
+                                "updatedAt": now,
+                                "collectedAt": now,
+                                "stale": False,
+                            }
+                    remaining = float(live2) if isinstance(live2, (int, float)) else live2.get("remaining")
+                    if remaining is not None:
+                        return {
+                            "ok": True,
+                            "plan": "unknown",
+                            "remaining": round(remaining, 2),
+                            "unit": "credits",
+                            "source": "trae-cdp",
+                            "updatedAt": now,
+                            "collectedAt": now,
+                            "stale": False,
+                        }
     files = trae_log_files()
     if not files:
         return fail("未找到 Trae 日志，请先打开 Trae 并登录")
