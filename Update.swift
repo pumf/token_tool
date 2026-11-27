@@ -213,6 +213,10 @@ enum UpdateInstaller {
             throw Failure(message: "写入 /Applications 失败，请手动拖拽安装")
         }
         try? manager.removeItem(at: backup)
+        // 清 quarantine 属性：DMG/ZIP 解压后 macOS 会标记，无签名 app 会被 Gatekeeper 拒绝启动。
+        // -r 递归清整个 .app 包，忽略不存在时的非零退出。
+        _ = try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", destination.path], timeout: 10)
+        _ = try? run("/usr/bin/codesign", ["--force", "--sign", "-", destination.path], timeout: 30)
     }
 
     static func mountedApp(in mount: URL) -> URL? {
