@@ -2572,7 +2572,10 @@ struct MenuPanel: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            WaveBackdrop(isActive: motion.isVisible)
+            if motion.isVisible {
+                WaveBackdrop(isActive: true)
+                    .transition(.opacity)
+            }
             ScrollView(.vertical, showsIndicators: contentHeight > maxHeight + 0.5) {
                 MenuContent(store: store, updates: updates)
                     .background(
